@@ -12,7 +12,10 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
 
 # Installation
  - Download the script file [stable-gimpfusion.py](https://github.com/artbit/stable-gimpfusion/raw/master/stable-gimpfusion.py), 
- save into your gimp plugin directory, ie: `~/.gimp-2.10/plug-ins/stable-gimpfusion.py`
+ save into your gimp plug-ins directory, ie: 
+   - Linux: `$HOME/.gimp-2.10/plug-ins/` or `$XDG_CONFIG_HOME/GIMP/2.10/plug-ins/`
+   - Windows: `%APPDATA%\GIMP\2.10\plug-ins\` or `C:\Users\{your_id}\AppData\Roaming\GIMP\2.10\plug-ins\`
+   - OSX: `$HOME/Library/GIMP/2.10/plug-ins/` or `$HOME/Library/Application Support/GIMP/2.10/`
  - Restart Gimp, and you will see a new AI menu item
  - Run script via `AI -> Stable Gimpfusion -> Config` and set the backend API URL base (should be `http://127.0.0.1:7860/sdapi/v1/` by default)
 
