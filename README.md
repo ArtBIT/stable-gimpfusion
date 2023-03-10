@@ -4,8 +4,13 @@
 
 <img src="https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/master/assets/icon.png" width="200" />
 
-
 This is a simple Gimp plugin that allows you to augment your painting using [Automatic1111's StableDiffusion Web-UI API](https://github.com/AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)) from your local StableDiffusion server.
+
+# Example usage
+
+[![Stable Gimpfusion Demo](https://img.youtube.com/vi/eJg_-xqu5OY/0.jpg)](https://www.youtube.com/watch?v=eJg_-xqu5OY)
+
+
 
 # Requirements
  - [Automatic1111's StableDiffusion Web-UI API](https://github.com/AUTOMATIC1111/stable-diffusion-webui#installation-and-running)
