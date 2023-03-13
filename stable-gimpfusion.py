@@ -24,13 +24,15 @@ VERSION = 2
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 
 STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
+        "sampler_name": "Euler a",
         "denoising_strength": 0.8,
         "cfg_scale": 7.5,
         "steps": 50,
         "seed": -1,
         "prompt": "",
         "negative_prompt": "",
-        "api_base": "http://127.0.0.1:7860/"
+        "api_base": "http://127.0.0.1:7860",
+        "model": ""
         }
 
 RESIZE_MODES = {
@@ -40,9 +42,55 @@ RESIZE_MODES = {
         "Just Resize (Latent Upscale)": 3
         }
 
+SAMPLERS = [
+      "Euler a",
+      "Euler",
+      "LMS",
+      "Heun",
+      "DPM2",
+      "DPM2 a",
+      "DPM++ 2S a",
+      "DPM++ 2M",
+      "DPM++ SDE",
+      "DPM fast",
+      "DPM adaptive",
+      "LMS Karras",
+      "DPM2 Karras",
+      "DPM2 a Karras",
+      "DPM++ 2S a Karras",
+      "DPM++ 2M Karras",
+      "DPM++ SDE Karras",
+      "DDIM"
+    ]
+
+CONTROLNET_RESIZE_MODES = [
+        "Just Resize",
+        "Scale to Fit (Inner Fit)",
+        "Envelope (Outer Fit)",
+        ]
+
+CONTROLNET_MODULES = [
+        "none",
+        "canny",
+        "depth",
+        "depth_leres",
+        "hed",
+        "mlsd",
+        "normal_map",
+        "openpose",
+        "openpose_hand",
+        "clip_vision",
+        "color",
+        "pidinet",
+        "scribble",
+        "fake_scribble",
+        "segmentation",
+        "binary"
+        ]
+
 CONTROLNET_DEFAULT_SETTINGS = {
-      "input_image": None,
-      "mask": None,
+      "input_image": "",
+      "mask": "",
       "module": "none",
       "model": "None",
       "weight": 1,
@@ -83,59 +131,59 @@ STABLE_GIMPFUSION_DATA = {
         "api_base": STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]
         }
 
-PLUGIN_FIELDS_COMMON = [
-        (PF_TEXT, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
-        (PF_TEXT, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"])
-        ]
-
 def roundToMultiple(value, multiple):
     return multiple * math.floor(value/multiple)
 
+def deepMapDict(d, cb):
+    d_type = type(d)
+    if d_type is dict:
+        return dict((k, deepMapDict(v, cb)) for k, v in d.iteritems() if v and deepMapDict(v, cb))
+    if d_type is list:
+        return map(lambda k: deepMapDict(k, cb), d)
+    else:
+        return cb(d)
+
+def pprintCompact(o):
+    pprint(deepMapDict(o, lambda o: o if type(o) != str else o[0:10] + "..." if len(o) > 10 else o))
+
 
 class ApiClient():
+    """ Simple API client used to interface with StableDiffusion JSON endpoints """
     def __init__(self, base_url):
         self.setBaseUrl(base_url)
 
     def setBaseUrl(self, base_url):
         self.base_url = base_url
 
-    def post(self, endpoint, data=None, params=None, headers=None):
-        gimp.pdb.gimp_progress_init("", None)
+    def post(self, endpoint, data={}, params={}, headers=None):
         try:
+            url = self.base_url + endpoint + "?" + urllib.urlencode(params)
+            print("POST "+url)
+            pprintCompact(data)
             data = json.dumps(data)
             headers = headers or {"Content-Type": "application/json", "Accept": "application/json"}
-            url = self.base_url + endpoint + "?" + urllib.urlencode(params or {})
             request = urllib2.Request(url=url, data=data, headers=headers)
-            gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
             response = urllib2.urlopen(request)
-            gimp.pdb.gimp_progress_set_text("Processing response...")
             data = response.read()
             data = json.loads(data)
-            gimp.pdb.gimp_progress_end()
             return data
         except Exception as ex:
+            print("ERROR: ApiClient.post")
             raise ex
-        finally:
-            gimp.pdb.gimp_progress_end()
 
-    def get(self, endpoint, params=None, headers=None):
-        gimp.pdb.gimp_progress_init("", None)
+    def get(self, endpoint, params={}, headers=None):
         try:
-            params = json.dumps(params)
+            url = self.base_url + endpoint + "?" + urllib.urlencode(params)
+            print("GET "+url)
             headers = headers or {"Content-Type": "application/json", "Accept": "application/json"}
-            url = self.base_url + endpoint + "?" + urllib.urlencode(params or {})
-            request = urllib2.Request(url=url, params=params, headers=headers)
-            gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
+            request = urllib2.Request(url=url, headers=headers)
             response = urllib2.urlopen(request)
-            gimp.pdb.gimp_progress_set_text("Processing response...")
             data = response.read()
             data = json.loads(data)
-            gimp.pdb.gimp_progress_end()
             return data
         except Exception as ex:
+            print("ERROR: ApiClient.get")
             raise ex
-        finally:
-            gimp.pdb.gimp_progress_end()
 
 
 class Rect():
@@ -200,6 +248,70 @@ class Rect():
         return self
 
 
+class StableDiffusionOptions():
+    """ Helper class to interface with the StableDiffusion options endpoint.
+        Used to change the checkpoint model.
+    """
+    def __init__(self, api):
+        self.name = "stable_diffusion_options"
+        self.options = {}
+        self.api = api
+        try:
+            self.load()
+        except Exception as ex:
+            raise ex
+
+    def load(self):
+        try:
+            self.options = self.api.get("/sdapi/v1/options") or {}
+        except Exception as ex:
+            print("ERROR: StableDiffusionOptions.load")
+            raise ex
+
+    def get(self, name, default_value=None):
+        if name in self.options:
+            return self.options[name]
+        return default_value
+
+    def set(self, name, value):
+        try:
+            data = {}
+            data[name] = value
+            self.api.post("/sdapi/v1/options", data=data)
+            self.options[name] = value
+        except Exception as ex:
+            print("ERROR: StableDiffusionOptions.set")
+            raise ex
+
+
+class DynamicDropdownData():
+    """ Get the StableDiffusion data needed for dynamic PF_OPTION lists """
+    def __init__(self):
+        self.name = "stable_diffusion_data"
+        self.settings = STABLE_GIMPFUSION_DATA.copy()
+        try:
+            self.fetch()
+        except Exception as ex:
+            raise ex
+
+    def fetch(self):
+        api = ApiClient(self.settings["api_base"])
+        try:
+            self.settings["models"] = map(lambda data: data["title"], api.get("/sdapi/v1/sd-models") or [])
+            self.settings["cn_models"] = api.get("/controlnet/model_list")["model_list"] or []
+            options = api.get("/sdapi/v1/options")
+            self.settings["sd_model_checkpoint"] = options["sd_model_checkpoint"] or 0
+        except Exception as ex:
+            print("ERROR: DynamicDropdownData.fetch")
+            raise ex
+
+    def get(self, name, default_value=None):
+        if name in self.settings:
+            return self.settings[name]
+        return default_value
+
+sd_data = DynamicDropdownData()
+
 class StableGimpfusionPlugin():
     def __init__(self, image):
         self.name = "stable_gimpfusion"
@@ -207,6 +319,7 @@ class StableGimpfusionPlugin():
         self.loadSettings()
         self.api = ApiClient(self.settings["api_base"])
         self.files = TempFiles()
+        self.options = StableDiffusionOptions(self.api)
 
     def loadSettings(self):
         parasite = self.image.parasite_find(self.name)
@@ -245,27 +358,34 @@ class StableGimpfusionPlugin():
         file = open(filepath, "rb")
         return base64.b64encode(file.read())
 
-    def getActiveLayerAsBase64(self):
-        filepath = self.files.get('init.png')
-        self.drawableToFile(self.image.active_layer, filepath)
+    def getLayerAsBase64(self, layer):
+        filepath = self.files.get('layer.png')
+        self.drawableToFile(layer, filepath)
         return self.fileToBase64(filepath)
 
-    def getActiveMaskAsBase64(self):
-        non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(self.image)
-        layer = self.image.active_layer
+    def getActiveLayerAsBase64(self):
+        return self.getLayerAsBase64(self.image.active_layer)
+
+    def getLayerMaskAsBase64(self, layer):
+        non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(layer.image)
         if non_empty:
-            layer = gimp.Layer(self.image, "mask", self.image.width, self.image.height, RGBA_IMAGE, 100, NORMAL_MODE)
+            # selection to file
+            layer = gimp.Layer(layer.image, "mask", layer.image.width, layer.image.height, RGBA_IMAGE, 100, NORMAL_MODE)
             mask = layer.create_mask(ADD_SELECTION_MASK)
             layer.add_mask(mask)
             filepath = self.files.get('selection.png')
             self.drawableToFile(layer.mask, filepath)
             return self.fileToBase64(filepath)
         elif layer.mask:
+            # mask to file
             filepath = self.files.get('mask.png')
             self.drawableToFile(layer.mask, filepath)
             return self.fileToBase64(filepath)
         else:
             return None
+
+    def getActiveMaskAsBase64(self):
+        return self.getLayerMaskAsBase64(self.image.active_layer)
 
     def getSelectionBounds(self):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(self.image)
@@ -276,6 +396,188 @@ class StableGimpfusionPlugin():
     def cleanup(self):
         self.files.removeAll()
         self.checkUpdate()
+
+    def getControlNetParams(self, cn_layer):
+        if cn_layer:
+            data = ControlNetLayerData(cn_layer).data.copy()
+            #if cn_layer != self.image.active_layer:
+            data.update({"input_image": self.getLayerAsBase64(cn_layer)})
+            data.update({"mask":""})
+            #mask = self.getLayerMaskAsBase64(cn_layer)
+            #if mask is not None:
+            #    data.update({"mask": mask})
+            print("ControlNet")
+            pprintCompact(data)
+
+            return data
+        return None
+
+    def imageToImage(self, resize_mode, prompt, negative_prompt, cn_enabled, cn_layer):
+        image = self.image
+        settings = self.settings
+        rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
+        width = rect.width
+        height = rect.height
+
+        data = {
+            "prompt": prompt + " " + settings["prompt"],
+            "negative_prompt": negative_prompt + " " +  settings["negative_prompt"],
+            "denoising_strength": float(settings["denoising_strength"]),
+            "resize_mode": resize_mode,
+            "steps": int(settings["steps"]),
+            "cfg_scale": float(settings["cfg_scale"]),
+            "width": int(width),
+            "height": int(height),
+            "init_images": [self.getActiveLayerAsBase64()],
+            "seed": settings["seed"]
+        }
+        try:
+            gimp.pdb.gimp_progress_init("", None)
+            gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
+            if cn_enabled:
+                data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
+                response = self.api.post("/controlnet/img2img", data)
+                # last image is the controlnet mask, ignore it
+                response["images"] = response["images"][:-1]
+            else:
+                response = self.api.post("/sdapi/v1/img2img", data)
+
+            Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
+        except Exception as ex:
+            print("ERROR: StableGimpfusionPlugin.imageToImage")
+            raise ex
+        finally:
+            gimp.pdb.gimp_progress_end()
+            self.cleanup()
+
+    def inpainting(self, resize_mode, prompt, negative_prompt, cn_enabled, cn_layer):
+
+        image = self.image
+        settings = self.settings
+        rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
+        width = rect.width
+        height = rect.height
+
+        mask = self.getActiveMaskAsBase64()
+        if mask is None:
+            print("ERROR: StableGimpfusionPlugin.inpainting")
+            raise Exception("Inpainting must use either a selection or layer mask")
+
+        data = {
+            "prompt": prompt + " " + settings["prompt"],
+            "negative_prompt": negative_prompt + " " +  settings["negative_prompt"],
+            "denoising_strength": float(settings["denoising_strength"]),
+            "steps": int(settings["steps"]),
+            "cfg_scale": float(settings["cfg_scale"]),
+            "width": int(width),
+            "height": int(height),
+            "init_images": [self.getActiveLayerAsBase64()],
+            "seed": settings["seed"],
+            "mask": mask,
+            "resize_mode": resize_mode,
+            "inpaint_full_res": True,
+            "inpaint_full_res_padding": 10,
+            "inpainting_mask_invert": 0,
+            "image_cfg_scale": 5,
+        }
+
+        try:
+            gimp.pdb.gimp_progress_init("", None)
+            gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
+            if cn_enabled:
+                data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
+                response = self.api.post("/controlnet/img2img", data)
+                # last image is the controlnet mask, ignore it
+                response["images"] = response["images"][:-1]
+            else:
+                response = self.api.post("/sdapi/v1/img2img", data)
+
+            Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
+        except Exception as ex:
+            print("ERROR: StableGimpfusionPlugin.inpainting")
+            raise ex
+        finally:
+            gimp.pdb.gimp_progress_end()
+            self.cleanup()
+
+    def textToImage(self, prompt, negative_prompt, cn_enabled, cn_layer):
+        image = self.image
+        settings = self.settings
+        x, y, width, height = self.getSelectionBounds()
+        rect = Rect(width, height).fitBetween((384, 384), (1024, 1024))
+        width = rect.width
+        height = rect.height
+
+        data = {
+            "prompt": prompt + " " + settings["prompt"],
+            "negative_prompt": negative_prompt + " " +  settings["negative_prompt"],
+            "denoising_strength": float(settings["denoising_strength"]),
+            "steps": int(settings["steps"]),
+            "cfg_scale": float(settings["cfg_scale"]),
+            "width": int(width),
+            "height": int(height),
+            "seed": settings["seed"],
+        }
+
+        try:
+            gimp.pdb.gimp_progress_init("", None)
+            gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
+            if cn_enabled:
+                data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
+                response = self.api.post("/controlnet/txt2img", data)
+                # last image is the controlnet mask, ignore it
+                response["images"] = response["images"][:-1]
+            else:
+                response = self.api.post("/sdapi/v1/txt2img", data)
+
+            Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale).translate((x, y)).addSelectionAsMask()
+        except Exception as ex:
+            print("ERROR: StableGimpfusionPlugin.textToImage")
+            raise ex
+        finally:
+            gimp.pdb.gimp_progress_end()
+            self.cleanup()
+
+    def saveControlLayer(self, module, model, weight, resize_mode, lowvram, guessmode, guidance_start, guidance_end, guidance, processor_res, threshold_a, threshold_b):
+        """ Take the form params and save them to the layer as gimp.Parasite """
+        cn_models = sd_data.get("cn_models", [])
+        settings = {
+            "module": CONTROLNET_MODULES[module],
+            "model": cn_models[model],
+            "weight": weight,
+            "resize_mode": CONTROLNET_RESIZE_MODES[resize_mode],
+            "lowvram": lowvram,
+            "guessmode": guessmode,
+            "guidance_start": guidance_start,
+            "guidance_end": guidance_end,
+            "guidance": guidance,
+            "processor_res": processor_res,
+            "threshold_a": threshold_a,
+            "threshold_b": threshold_b,
+        }
+        cnlayer = ControlNetLayerData(self.image.active_layer)
+        cnlayer.save(settings)
+
+    def config(self, mask_blur, denoising_strength, cfg_scale, sampler_name, steps, seed, prompt, negative_prompt, url, model):
+        model = sd_data.get("models")[model]
+        settings = {
+            "mask_blur": mask_blur,
+            "denoising_strength": denoising_strength,
+            "cfg_scale": cfg_scale,
+            "sampler_name": sampler_name,
+            "steps": steps,
+            "seed": seed,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "api_base": url,
+            "model": model
+        }
+        if self.settings["model"] != model:
+            gimp.pdb.gimp_progress_init("", None)
+            gimp.pdb.gimp_progress_set_text("Changing model...")
+            self.options.set("sd_model_checkpoint", model)
+            gimp.pdb.gimp_progress_end()
+        self.saveSettings(settings)
 
 
 class TempFiles(object):
@@ -301,26 +603,28 @@ class TempFiles(object):
             ex = ex
 
 
-class ControlNetLayer():
+class ControlNetLayerData():
     def __init__(self, layer):
         self.name = "ControlNet"
         self.layer = layer
         self.image = layer.image
-        self.loadSettings()
+        self.load()
 
-    def loadSettings(self):
+    def load(self):
         parasite = self.layer.parasite_find(self.name)
         if not parasite:
-            self.settings = STABLE_GIMPFUSION_DEFAULT_SETTINGS
+            self.data = CONTROLNET_DEFAULT_SETTINGS
+            pdb.gimp_layer_set_name(self.layer, self.name + " Layer")
         else:
-            self.settings = json.loads(parasite.data)
+            self.data = json.loads(parasite.data)
+        return self.data
 
-    def saveSettings(self, settings):
-        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_UNDOABLE, json.dumps(settings))
-        self.image.parasite_attach(parasite)
+    def save(self, data):
+        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_UNDOABLE, json.dumps(data))
+        self.layer.parasite_attach(parasite)
 
 
-class ApiLayers():
+class Layers():
     def __init__(self, img, images):
         self.image = img
         color = gimp.pdb.gimp_context_get_foreground()
@@ -333,6 +637,7 @@ class ApiLayers():
             imageFile.write(base64.b64decode(image))
             imageFile.close()
             layer = gimp.pdb.gimp_file_load_layer(img, filepath)
+            pdb.gimp_layer_set_name(layer, "Generated Layer")
             layers.append(layer)
 
         gimp.pdb.gimp_context_set_foreground(color)
@@ -366,157 +671,89 @@ class ApiLayers():
         return self
 
 
-def handleConfig(image, drawable, mask_blur, denoising_strength, cfgScale, steps, seed, prompt, negative_prompt, url):
-    settings = {
-        "mask_blur": mask_blur,
-        "denoising_strength": denoising_strength,
-        "cfg_scale": cfgScale,
-        "steps": steps,
-        "seed": seed,
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "api_base": url
-    }
-    plugin = StableGimpfusionPlugin(image)
-    plugin.saveSettings(settings)
+def handleConfig(image, drawable, *args):
+    StableGimpfusionPlugin(image).config(*args)
 
+def handleImageToImage(image, drawable, *args):
+    StableGimpfusionPlugin(image).imageToImage(*args)
 
-def handleImageToImage(image, drawable, prompt, negative_prompt):
-    plugin = StableGimpfusionPlugin(image)
-    settings = plugin.settings
-    rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
-    width = rect.width
-    height = rect.height
+def handleImageToImageFromLayersContext(image, drawable, run_type, *args):
+    StableGimpfusionPlugin(image).imageToImage(*args)
 
-    data = {
-        "prompt": prompt + " " + settings["prompt"],
-        "negative_prompt": negative_prompt + " " +  settings["negative_prompt"],
-        "denoising_strength": float(settings["denoising_strength"]),
-        "steps": int(settings["steps"]),
-        "cfg_scale": float(settings["cfg_scale"]),
-        "width": int(width),
-        "height": int(height),
-        "init_images": [plugin.getActiveLayerAsBase64()],
-        "seed": settings["seed"]
-    }
-    try:
-        response = plugin.api.post("sdapi/v1/img2img", data)
-        ApiLayers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
-    except Exception as ex:
-        raise ex
-    finally:
-        plugin.cleanup()
+def handleInpainting(image, drawable, *args):
+    StableGimpfusionPlugin(image).inpainting(*args)
 
+def handleInpaintingFromLayersContext(image, drawable, run_type, *args):
+    StableGimpfusionPlugin(image).inpainting(*args)
 
-def handleInpainting(image, drawable, resize_mode, prompt, negative_prompt):
-    plugin = StableGimpfusionPlugin(image)
-    settings = plugin.settings
-    rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
-    width = rect.width
-    height = rect.height
+def handleTextToImage(image, drawable, *args):
+    StableGimpfusionPlugin(image).textToImage(*args)
 
-    mask = plugin.getActiveMaskAsBase64()
-    if mask is None:
-        raise Exception("Inpainting must use either a selection or layer mask")
+def handleTextToImageFromLayersContext(image, drawable, run_type, *args):
+    StableGimpfusionPlugin(image).textToImage(*args)
 
-    data = {
-        "prompt": prompt + " " + settings["prompt"],
-        "negative_prompt": negative_prompt + " " +  settings["negative_prompt"],
-        "denoising_strength": float(settings["denoising_strength"]),
-        "steps": int(settings["steps"]),
-        "cfg_scale": float(settings["cfg_scale"]),
-        "width": int(width),
-        "height": int(height),
-        "init_images": [plugin.getActiveLayerAsBase64()],
-        "seed": settings["seed"],
-        "mask": mask,
-        "resize_mode": resize_mode,
-        "inpaint_full_res": True,
-        "inpaint_full_res_padding": 10,
-        "inpainting_mask_invert": 0,
-        "image_cfg_scale": 5,
-    }
+def handleControlNetLayerConfig(image, drawable, *args):
+    StableGimpfusionPlugin(image).saveControlLayer(*args)
 
-    try:
-        response = plugin.api.post("sdapi/v1/img2img", data)
-        ApiLayers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
-    except Exception as ex:
-        raise ex
-    finally:
-        plugin.cleanup()
+def handleControlNetLayerConfigFromLayersContext(image, drawable, run_type, *args):
+    StableGimpfusionPlugin(image).saveControlLayer(*args)
 
+models = sd_data.get("models", [])
+sd_model_checkpoint = sd_data.get("sd_model_checkpoint")
 
-def handleTextToImage(image, drawable, prompt, negative_prompt):
+PLUGIN_FIELDS_IMAGE = [
+        (PF_IMAGE, "image", "Image", None),
+        (PF_DRAWABLE, "drawable", "Drawable", None),
+        ]
 
-    plugin = StableGimpfusionPlugin(image)
-    settings = plugin.settings
-    x, y, width, height = plugin.getSelectionBounds()
-    rect = Rect(width, height).fitBetween((384, 384), (1024, 1024))
-    width = rect.width
-    height = rect.height
+PLUGIN_FIELDS_LAYERS = [
+        (PF_IMAGE, "image", "Image", None),
+        (PF_LAYER, "layer", "Layer", None),
+        (PF_INT32, "run_type", "Ignore", 0),
+        ]
 
-    data = {
-        "prompt": prompt + " " + settings["prompt"],
-        "negative_prompt": negative_prompt + " " +  settings["negative_prompt"],
-        "denoising_strength": float(settings["denoising_strength"]),
-        "steps": int(settings["steps"]),
-        "cfg_scale": float(settings["cfg_scale"]),
-        "width": int(width),
-        "height": int(height),
-        "seed": settings["seed"],
-    }
+PLUGIN_FIELDS_COMMON = [
+        (PF_TEXT, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
+        (PF_TEXT, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"])
+        ]
 
-    try:
-        response = plugin.api.post("sdapi/v1/txt2img", data=data)
-        ApiLayers(image, response["images"]).insertTo(image).scale(1.0/rect.scale).translate((x, y)).addSelectionAsMask()
-    except Exception as ex:
-        raise ex
-    finally:
-        plugin.cleanup()
+PLUGIN_FIELDS_CONTROLNET = [
+        (PF_TOGGLE, "cnet_enabled", "Enable ControlNet", False),
+        (PF_LAYER, "cnet_layer", "ControlNet Layer", None)
+        ]
 
-class StableDiffusionData():
-    def __new__(cls):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(StableDiffusionData, cls).__new__(cls)
-        return cls.instance
+PLUGIN_FIELDS_CONFIG = [
+    (PF_INT8, "mask_blur", "Mask Blur", 4),
+    (PF_SLIDER, "denoising_strength", "Denoising Strength", STABLE_GIMPFUSION_DEFAULT_SETTINGS["denoising_strength"], (0.0, 1.0, 0.1)),
+    (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
+    (PF_OPTION, "sampler_name", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
+    (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1)),
+    (PF_STRING, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
+    (PF_STRING, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
+    (PF_STRING, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
+    (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]),
+    (PF_OPTION, "model", "Model", models.index(sd_model_checkpoint), models)
+    ]
 
-    def __init__(self):
-        self.name = "stable_diffusion_data"
-        print("Initializing " + self.name)
-        try:
-            pprint(shelf)
-            pprint(shelf.has_key)
-            pprint(self.name)
-            settings = self.fetch()
-            pprint(settings)
-            self.settings = json.loads(settings)
-        except Exception as ex:
-            pprint("error")
-            pprint(ex)
+PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET
 
-    def fetch(self):
-        pprint("Fetching ")
-        api = ApiClient(self.settings["api_base"])
+PLUGIN_FIELDS_RESIZE_MODE = [(PF_OPTION, "resize_mode", "Resize Mode", 0, tuple(RESIZE_MODES.keys()))]
+PLUGIN_FIELDS_IMG2IMG = [] + PLUGIN_FIELDS_RESIZE_MODE + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET
 
-        settings = [] + STABLE_GIMPFUSION_DATA
-        pprint(settings)
-        try:
-            cn_models = api.get("/controlnet/model_list")
-            pprint(cn_models)
-        except Exception as ex:
-            raise ex
-
-        return settings
-
-    def get(self, name):
-        pprint("Get "+name)
-        if name in self.settings:
-            return self.settings[name]
-        return None
-
-
-data = StableDiffusionData()
-
+PLUGIN_FIELDS_CONTROLNET = [] + [
+        (PF_OPTION, "module", "Module", 0, CONTROLNET_MODULES),
+        (PF_OPTION, "model", "Model", 0, sd_data.get("cn_models", ["none"])),
+        (PF_SLIDER, "weight",  "Weight", 1, (0, 2, 0.05)),
+        (PF_OPTION, "resize_mode", "Resize Mode", 1, CONTROLNET_RESIZE_MODES),
+        (PF_BOOL, "lowvram", "Low VRAM", False),
+        (PF_BOOL, "guessmode", "Guess Mode", False),
+        (PF_SLIDER, "guidance_start",  "Guidance Start (T)", 0, (0, 1, 0.01)),
+        (PF_SLIDER, "guidance_end",  "Guidance End (T)", 1, (0, 1, 0.01)),
+        (PF_SLIDER, "guidance",  "Guidance", 1, (0, 1, 0.01)),
+        (PF_SLIDER, "processor_res",  "Processor Resolution", 64, (64, 2048, 1)),
+        (PF_SLIDER, "threshold_a",  "Threshold A", 64, (64, 2048, 1)),
+        (PF_SLIDER, "threshold_b",  "Threshold B", 64, (64, 2048, 1)),
+        ]
 
 register(
         "stable-gimpfusion-config",
@@ -525,18 +762,9 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/AI/Stable GimpFusion/Global Config",
+        "<Image>/GimpFusion/Configure",
         "*",
-        [
-            (PF_INT8, "mask_blur", "Mask Blur", 4),
-            (PF_SLIDER, "denoising_strength", "Denoising Strength", STABLE_GIMPFUSION_DEFAULT_SETTINGS["denoising_strength"], (0.0, 1.0, 0.1)),
-            (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
-            (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1)),
-            (PF_STRING, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
-            (PF_STRING, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
-            (PF_STRING, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
-            (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"])
-            ],
+        PLUGIN_FIELDS_CONFIG,
         [],
         handleConfig
         )
@@ -548,11 +776,26 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/AI/Stable GimpFusion/Text to image",
+        "<Image>/GimpFusion/Text to image",
         "*",
-        []+PLUGIN_FIELDS_COMMON,
+        [] + PLUGIN_FIELDS_TXT2IMG,
         [],
         handleTextToImage
+        )
+
+
+register(
+        "stable-gimpfusion-txt2img-context",
+        "Text to image",
+        "Text to image",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Layers>/GimpFusion/Text to image",
+        "*",
+        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_TXT2IMG,
+        [],
+        handleTextToImageFromLayersContext
         )
 
 
@@ -563,11 +806,25 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/AI/Stable GimpFusion/Image to image",
+        "<Image>/GimpFusion/Image to image",
         "*",
-        []+PLUGIN_FIELDS_COMMON,
+        [] + PLUGIN_FIELDS_IMG2IMG,
         [],
         handleImageToImage
+        )
+
+register(
+        "stable-gimpfusion-img2img-context",
+        "Image to image",
+        "Image to image",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Layers>/GimpFusion/Image to image",
+        "*",
+        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
+        [],
+        handleImageToImageFromLayersContext
         )
 
 register(
@@ -577,11 +834,53 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/AI/Stable GimpFusion/Inpainting",
+        "<Image>/GimpFusion/Inpainting",
         "*",
-        [(PF_OPTION, "resize_mode", "Resize Mode", 0, tuple(RESIZE_MODES.keys()))] + PLUGIN_FIELDS_COMMON,
+        [] + PLUGIN_FIELDS_IMG2IMG,
         [],
         handleInpainting
+        )
+
+register(
+        "stable-gimpfusion-inpainting-context",
+        "Inpainting",
+        "Inpainting",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Layers>/GimpFusion/Inpainting",
+        "*",
+        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
+        [],
+        handleInpaintingFromLayersContext
+        )
+
+register(
+        "stable-gimpfusion-config-controlnet-layer",
+        "Convert current layer to ControlNet layer or edit ControlNet Layer's options",
+        "ControlNet Layer",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Image>/GimpFusion/Use as ControlNet",
+        "*",
+        [] + PLUGIN_FIELDS_CONTROLNET,
+        [],
+        handleControlNetLayerConfig
+        )
+
+register(
+        "stable-gimpfusion-config-controlnet-layer-context",
+        "Convert current layer to ControlNet layer or edit ControlNet Layer's options",
+        "ControlNet Layer",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Layers>/GimpFusion/Use as ControlNet",
+        "*",
+        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_CONTROLNET,
+        [],
+        handleControlNetLayerConfigFromLayersContext
         )
 
 main()
