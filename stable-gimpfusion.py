@@ -92,7 +92,7 @@ CONTROLNET_DEFAULT_SETTINGS = {
       "input_image": "",
       "mask": "",
       "module": "none",
-      "model": "None",
+      "model": "none",
       "weight": 1,
       "resize_mode": "Scale to Fit (Inner Fit)",
       "lowvram": False,
@@ -429,7 +429,8 @@ class StableGimpfusionPlugin():
             "width": int(width),
             "height": int(height),
             "init_images": [self.getActiveLayerAsBase64()],
-            "seed": settings["seed"]
+            "sampler_index": settings["sampler_name"],
+            "seed": int(settings["seed"])
         }
         try:
             gimp.pdb.gimp_progress_init("", None)
@@ -438,7 +439,8 @@ class StableGimpfusionPlugin():
                 data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
                 response = self.api.post("/controlnet/img2img", data)
                 # last image is the controlnet mask, ignore it
-                response["images"] = response["images"][:-1]
+                if len(response["images"]) > 1:
+                    response["images"] = response["images"][:-1]
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
@@ -472,13 +474,14 @@ class StableGimpfusionPlugin():
             "width": int(width),
             "height": int(height),
             "init_images": [self.getActiveLayerAsBase64()],
-            "seed": settings["seed"],
+            "seed": int(settings["seed"]),
             "mask": mask,
             "resize_mode": resize_mode,
             "inpaint_full_res": True,
             "inpaint_full_res_padding": 10,
             "inpainting_mask_invert": 0,
             "image_cfg_scale": 5,
+            "sampler_index": settings["sampler_name"],
         }
 
         try:
@@ -488,7 +491,8 @@ class StableGimpfusionPlugin():
                 data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
                 response = self.api.post("/controlnet/img2img", data)
                 # last image is the controlnet mask, ignore it
-                response["images"] = response["images"][:-1]
+                if len(response["images"]) > 1:
+                    response["images"] = response["images"][:-1]
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
@@ -516,17 +520,20 @@ class StableGimpfusionPlugin():
             "cfg_scale": float(settings["cfg_scale"]),
             "width": int(width),
             "height": int(height),
-            "seed": settings["seed"],
+            "sampler_index": settings["sampler_name"],
+            "seed": int(settings["seed"]),
         }
 
         try:
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
             if cn_enabled:
+                print("ControlNet is enabled")
                 data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
                 response = self.api.post("/controlnet/txt2img", data)
                 # last image is the controlnet mask, ignore it
-                response["images"] = response["images"][:-1]
+                if len(response["images"]) > 1:
+                    response["images"] = response["images"][:-1]
             else:
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
@@ -558,26 +565,27 @@ class StableGimpfusionPlugin():
         cnlayer = ControlNetLayerData(self.image.active_layer)
         cnlayer.save(settings)
 
-    def config(self, mask_blur, denoising_strength, cfg_scale, sampler_name, steps, seed, prompt, negative_prompt, url, model):
+    def config(self, mask_blur, denoising_strength, cfg_scale, sampler_index, steps, seed, prompt, negative_prompt, url):
         model = sd_data.get("models")[model]
         settings = {
             "mask_blur": mask_blur,
             "denoising_strength": denoising_strength,
             "cfg_scale": cfg_scale,
-            "sampler_name": sampler_name,
+            "sampler_name": SAMPLERS[sampler_index],
             "steps": steps,
-            "seed": seed,
+            "seed": int(seed),
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "api_base": url,
-            "model": model
         }
+        self.saveSettings(settings)
+
+    def changeModel(self, model):
         if self.settings["model"] != model:
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text("Changing model...")
             self.options.set("sd_model_checkpoint", model)
             gimp.pdb.gimp_progress_end()
-        self.saveSettings(settings)
 
 
 class TempFiles(object):
@@ -674,6 +682,9 @@ class Layers():
 def handleConfig(image, drawable, *args):
     StableGimpfusionPlugin(image).config(*args)
 
+def handleChangeModel(image, drawable, *args):
+    StableGimpfusionPlugin(image).changeModel(*args)
+
 def handleImageToImage(image, drawable, *args):
     StableGimpfusionPlugin(image).imageToImage(*args)
 
@@ -726,12 +737,15 @@ PLUGIN_FIELDS_CONFIG = [
     (PF_INT8, "mask_blur", "Mask Blur", 4),
     (PF_SLIDER, "denoising_strength", "Denoising Strength", STABLE_GIMPFUSION_DEFAULT_SETTINGS["denoising_strength"], (0.0, 1.0, 0.1)),
     (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
-    (PF_OPTION, "sampler_name", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
+    (PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
     (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1)),
     (PF_STRING, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
     (PF_STRING, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
     (PF_STRING, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
     (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]),
+    ]
+
+PLUGIN_FIELDS_CHECKPOINT = [
     (PF_OPTION, "model", "Model", models.index(sd_model_checkpoint), models)
     ]
 
@@ -750,9 +764,9 @@ PLUGIN_FIELDS_CONTROLNET = [] + [
         (PF_SLIDER, "guidance_start",  "Guidance Start (T)", 0, (0, 1, 0.01)),
         (PF_SLIDER, "guidance_end",  "Guidance End (T)", 1, (0, 1, 0.01)),
         (PF_SLIDER, "guidance",  "Guidance", 1, (0, 1, 0.01)),
-        (PF_SLIDER, "processor_res",  "Processor Resolution", 64, (64, 2048, 1)),
-        (PF_SLIDER, "threshold_a",  "Threshold A", 64, (64, 2048, 1)),
-        (PF_SLIDER, "threshold_b",  "Threshold B", 64, (64, 2048, 1)),
+        (PF_SLIDER, "processor_res",  "Processor Resolution", 512, (64, 2048, 1)),
+        (PF_SLIDER, "threshold_a",  "Threshold A", 64, (100, 2048, 1)),
+        (PF_SLIDER, "threshold_b",  "Threshold B", 64, (200, 2048, 1)),
         ]
 
 register(
@@ -767,6 +781,20 @@ register(
         PLUGIN_FIELDS_CONFIG,
         [],
         handleConfig
+        )
+
+register(
+        "stable-gimpfusion-config",
+        "Change the Checkpoint Model",
+        "Change the Checkpoint Model",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Image>/GimpFusion/Change Model",
+        "*",
+        PLUGIN_FIELDS_CHECKPOINT,
+        [],
+        handleChangeModel
         )
 
 register(
