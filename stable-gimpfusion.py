@@ -784,7 +784,7 @@ register(
         )
 
 register(
-        "stable-gimpfusion-config",
+        "stable-gimpfusion-config-model",
         "Change the Checkpoint Model",
         "Change the Checkpoint Model",
         "ArtBIT",
@@ -890,7 +890,7 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Use as ControlNet",
+        "<Image>/GimpFusion/Active layer as ControlNet",
         "*",
         [] + PLUGIN_FIELDS_CONTROLNET,
         [],
