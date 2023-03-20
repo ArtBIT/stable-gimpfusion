@@ -20,7 +20,8 @@ from gimpfu import *
 from gimpshelf import shelf
 from pprint import pprint
 
-VERSION = 2
+DEBUG = False
+VERSION = 5
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 
 STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
@@ -128,7 +129,9 @@ GENERATION_MESSAGES = [
 STABLE_GIMPFUSION_DATA = {
         "models": [],
         "cn_models": [],
-        "api_base": STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]
+        "api_base": STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"],
+        "sd_model_checkpoint": None,
+        "is_server_running": False
         }
 
 def roundToMultiple(value, multiple):
@@ -169,7 +172,9 @@ class ApiClient():
             return data
         except Exception as ex:
             print("ERROR: ApiClient.post")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
 
     def get(self, endpoint, params={}, headers=None):
         try:
@@ -183,7 +188,9 @@ class ApiClient():
             return data
         except Exception as ex:
             print("ERROR: ApiClient.get")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
 
 
 class Rect():
@@ -204,11 +211,15 @@ class Rect():
             if type(width) == int or type(width) == float:
                 self.width = width
             else:
-                raise Exception("Width must be of type int or float")
+                global DEBUG
+                if DEBUG:
+                    raise Exception("Width must be of type int or float")
             if type(height) == int or type(height) == float:
                 self.height = height
             else:
-                raise Exception("Height must be of type int or float")
+                global DEBUG
+                if DEBUG:
+                    raise Exception("Height must be of type int or float")
             self.scale = 1.0
 
     def scale(self, new_scale):
@@ -259,14 +270,18 @@ class StableDiffusionOptions():
         try:
             self.load()
         except Exception as ex:
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
 
     def load(self):
         try:
             self.options = self.api.get("/sdapi/v1/options") or {}
         except Exception as ex:
             print("ERROR: StableDiffusionOptions.load")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
 
     def get(self, name, default_value=None):
         if name in self.options:
@@ -281,7 +296,9 @@ class StableDiffusionOptions():
             self.options[name] = value
         except Exception as ex:
             print("ERROR: StableDiffusionOptions.set")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
 
 
 class DynamicDropdownData():
@@ -300,10 +317,14 @@ class DynamicDropdownData():
             self.settings["models"] = map(lambda data: data["title"], api.get("/sdapi/v1/sd-models") or [])
             self.settings["cn_models"] = api.get("/controlnet/model_list")["model_list"] or []
             options = api.get("/sdapi/v1/options")
-            self.settings["sd_model_checkpoint"] = options["sd_model_checkpoint"] or 0
+            self.settings["sd_model_checkpoint"] = options["sd_model_checkpoint"] or None
+            self.settings["is_server_running"] = True
         except Exception as ex:
             print("ERROR: DynamicDropdownData.fetch")
-            raise ex
+            self.settings["is_server_running"] = False
+            global DEBUG
+            if DEBUG:
+                raise ex
 
     def get(self, name, default_value=None):
         if name in self.settings:
@@ -311,16 +332,26 @@ class DynamicDropdownData():
         return default_value
 
 sd_data = DynamicDropdownData()
-
+models = sd_data.get("models", [])
+sd_model_checkpoint = sd_data.get("sd_model_checkpoint")
+is_server_running = sd_data.get("is_server_running")
 
 class StableGimpfusionPlugin():
     def __init__(self, image):
         self.name = "stable_gimpfusion"
         self.image = image
         self.loadSettings()
-        self.api = ApiClient(self.settings["api_base"])
-        self.files = TempFiles()
-        self.options = StableDiffusionOptions(self.api)
+
+        global is_server_running
+        if not is_server_running:
+            gimp.pdb.gimp_message("It seems that StableDiffusion is not runing on "+self.settings["api_base"])
+
+        try:
+            self.api = ApiClient(self.settings["api_base"])
+            self.files = TempFiles()
+            self.options = StableDiffusionOptions(self.api)
+        except Exception as e:
+            print("ERROR: StableGimpfusionPlugin.__init__")
 
     def loadSettings(self):
         parasite = self.image.parasite_find(self.name)
@@ -448,7 +479,9 @@ class StableGimpfusionPlugin():
             Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.imageToImage")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
@@ -500,7 +533,9 @@ class StableGimpfusionPlugin():
             Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.inpainting")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
@@ -543,7 +578,9 @@ class StableGimpfusionPlugin():
             #enable = pdb.gimp_image_undo_enable(image)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.textToImage")
-            raise ex
+            global DEBUG
+            if DEBUG:
+                raise ex
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
@@ -712,9 +749,6 @@ def handleControlNetLayerConfig(image, drawable, *args):
 def handleControlNetLayerConfigFromLayersContext(image, drawable, run_type, *args):
     StableGimpfusionPlugin(image).saveControlLayer(*args)
 
-models = sd_data.get("models", [])
-sd_model_checkpoint = sd_data.get("sd_model_checkpoint")
-
 PLUGIN_FIELDS_IMAGE = [
         (PF_IMAGE, "image", "Image", None),
         (PF_DRAWABLE, "drawable", "Drawable", None),
@@ -748,9 +782,12 @@ PLUGIN_FIELDS_CONFIG = [
     (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]),
     ]
 
-PLUGIN_FIELDS_CHECKPOINT = [
-    (PF_OPTION, "model", "Model", models.index(sd_model_checkpoint), models)
-    ]
+if sd_model_checkpoint is not None:
+    PLUGIN_FIELDS_CHECKPOINT = [
+        (PF_OPTION, "model", "Model", models.index(sd_model_checkpoint), models)
+        ]
+else:
+    PLUGIN_FIELDS_CHECKPOINT = []
 
 PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET
 
