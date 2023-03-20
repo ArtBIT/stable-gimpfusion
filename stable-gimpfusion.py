@@ -292,7 +292,7 @@ class DynamicDropdownData():
         try:
             self.fetch()
         except Exception as ex:
-            raise ex
+            pass
 
     def fetch(self):
         api = ApiClient(self.settings["api_base"])
@@ -311,6 +311,7 @@ class DynamicDropdownData():
         return default_value
 
 sd_data = DynamicDropdownData()
+
 
 class StableGimpfusionPlugin():
     def __init__(self, image):
@@ -537,7 +538,9 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
+            #disable=pdb.gimp_image_undo_disable(image)
             Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale).translate((x, y)).addSelectionAsMask()
+            #enable = pdb.gimp_image_undo_enable(image)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.textToImage")
             raise ex
