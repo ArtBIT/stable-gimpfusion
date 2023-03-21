@@ -18,11 +18,12 @@ import urllib
 import urllib2
 from gimpfu import *
 from gimpshelf import shelf
-from pprint import pprint
+from pprint import pprint, pformat
 
-DEBUG = False
-VERSION = 5
+DEBUG = True
+VERSION = 6
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
+MAX_BATCH_SIZE = 20
 
 STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
         "sampler_name": "Euler a",
@@ -361,7 +362,7 @@ class StableGimpfusionPlugin():
             self.settings = json.loads(parasite.data)
 
     def saveSettings(self, settings):
-        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_UNDOABLE, json.dumps(settings))
+        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_PERSISTENT, json.dumps(settings))
         self.image.parasite_attach(parasite)
 
     def checkUpdate(self):
@@ -431,7 +432,7 @@ class StableGimpfusionPlugin():
 
     def getControlNetParams(self, cn_layer):
         if cn_layer:
-            data = ControlNetLayerData(cn_layer).data.copy()
+            data = LayerData(cn_layer, CONTROLNET_DEFAULT_SETTINGS).data.copy()
             #if cn_layer != self.image.active_layer:
             data.update({"input_image": self.getLayerAsBase64(cn_layer)})
             data.update({"mask":""})
@@ -444,7 +445,7 @@ class StableGimpfusionPlugin():
             return data
         return None
 
-    def imageToImage(self, resize_mode, prompt, negative_prompt, cn_enabled, cn_layer):
+    def imageToImage(self, resize_mode, prompt, negative_prompt, seed, batch_size, cn_enabled, cn_layer):
         image = self.image
         settings = self.settings
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
@@ -462,7 +463,8 @@ class StableGimpfusionPlugin():
             "height": int(height),
             "init_images": [self.getActiveLayerAsBase64()],
             "sampler_index": settings["sampler_name"],
-            "seed": int(settings["seed"])
+            "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
+            "seed": seed
         }
         try:
             gimp.pdb.gimp_progress_init("", None)
@@ -476,7 +478,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
+            ResponseLayers(image, response).scale(1.0/rect.scale)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.imageToImage")
             global DEBUG
@@ -486,7 +488,7 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_end()
             self.cleanup()
 
-    def inpainting(self, resize_mode, prompt, negative_prompt, cn_enabled, cn_layer):
+    def inpainting(self, resize_mode, prompt, negative_prompt, seed, batch_size, cn_enabled, cn_layer):
 
         image = self.image
         settings = self.settings
@@ -508,7 +510,6 @@ class StableGimpfusionPlugin():
             "width": int(width),
             "height": int(height),
             "init_images": [self.getActiveLayerAsBase64()],
-            "seed": int(settings["seed"]),
             "mask": mask,
             "resize_mode": resize_mode,
             "inpaint_full_res": True,
@@ -516,6 +517,8 @@ class StableGimpfusionPlugin():
             "inpainting_mask_invert": 0,
             "image_cfg_scale": 5,
             "sampler_index": settings["sampler_name"],
+            "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
+            "seed": seed
         }
 
         try:
@@ -530,7 +533,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale)
+            ResponseLayers(image, response).scale(1.0/rect.scale)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.inpainting")
             global DEBUG
@@ -540,7 +543,7 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_end()
             self.cleanup()
 
-    def textToImage(self, prompt, negative_prompt, cn_enabled, cn_layer):
+    def textToImage(self, prompt, negative_prompt, seed, batch_size, cn_enabled, cn_layer):
         image = self.image
         settings = self.settings
         x, y, width, height = self.getSelectionBounds()
@@ -557,7 +560,8 @@ class StableGimpfusionPlugin():
             "width": int(width),
             "height": int(height),
             "sampler_index": settings["sampler_name"],
-            "seed": int(settings["seed"]),
+            "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
+            "seed": seed
         }
 
         try:
@@ -574,7 +578,7 @@ class StableGimpfusionPlugin():
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
             #disable=pdb.gimp_image_undo_disable(image)
-            Layers(image, response["images"]).insertTo(image).scale(1.0/rect.scale).translate((x, y)).addSelectionAsMask()
+            ResponseLayers(image, response).scale(1.0/rect.scale).translate((x, y)).addSelectionAsMask()
             #enable = pdb.gimp_image_undo_enable(image)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.textToImage")
@@ -584,6 +588,13 @@ class StableGimpfusionPlugin():
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
+
+    def showLayerInfo(self, *args):
+        """ Show any layer info associated with the active layer """
+
+        data = LayerData(self.image.active_layer).data
+        gimp.pdb.gimp_message("This layer has the following data associated with it\n" + json.dumps(data, sort_keys=True, indent=4))
+
 
     def saveControlLayer(self, module, model, weight, resize_mode, lowvram, guessmode, guidance_start, guidance_end, guidance, processor_res, threshold_a, threshold_b):
         """ Take the form params and save them to the layer as gimp.Parasite """
@@ -602,18 +613,21 @@ class StableGimpfusionPlugin():
             "threshold_a": threshold_a,
             "threshold_b": threshold_b,
         }
-        cnlayer = ControlNetLayerData(self.image.active_layer)
+        active_layer = self.image.active_layer
+        cnlayer = LayerData(active_layer, CONTROLNET_DEFAULT_SETTINGS)
+        if not cnlayer.had_parasite:
+            pdb.gimp_layer_set_name(active_layer, "ControlNet Layer")
         cnlayer.save(settings)
 
     def config(self, mask_blur, denoising_strength, cfg_scale, sampler_index, steps, seed, prompt, negative_prompt, url):
-        model = sd_data.get("models")[model]
+        #model = sd_data.get("models")[model]
         settings = {
             "mask_blur": mask_blur,
             "denoising_strength": denoising_strength,
             "cfg_scale": cfg_scale,
             "sampler_name": SAMPLERS[sampler_index],
             "steps": steps,
-            "seed": int(seed),
+            "seed": seed,
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "api_base": url,
@@ -651,42 +665,52 @@ class TempFiles(object):
             ex = ex
 
 
-class ControlNetLayerData():
-    def __init__(self, layer):
-        self.name = "ControlNet"
+class LayerData():
+    def __init__(self, layer, defaults = {}):
+        self.name = 'gimpfusion'
         self.layer = layer
         self.image = layer.image
+        self.defaults = defaults;
+        self.had_parasite = False
         self.load()
 
     def load(self):
         parasite = self.layer.parasite_find(self.name)
         if not parasite:
-            self.data = CONTROLNET_DEFAULT_SETTINGS
-            pdb.gimp_layer_set_name(self.layer, self.name + " Layer")
+            self.data = self.defaults.copy()
         else:
+            self.had_parasite = True
             self.data = json.loads(parasite.data)
         return self.data
 
     def save(self, data):
-        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_UNDOABLE, json.dumps(data))
+        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_PERSISTENT, json.dumps(data).encode('utf8'))
         self.layer.parasite_attach(parasite)
 
 
-class Layers():
-    def __init__(self, img, images):
+class ResponseLayers():
+    def __init__(self, img, response):
         self.image = img
         color = gimp.pdb.gimp_context_get_foreground()
         gimp.pdb.gimp_context_set_foreground((0, 0, 0))
 
+        info = json.loads(response["info"])
+        infotexts = info["infotexts"]
+        seeds = info["all_seeds"]
         layers = []
-        for image in images:
+        index = 0
+        for image in response["images"]:
             filepath = TempFiles().get("generated.png")
             imageFile = open(filepath, "wb+")
             imageFile.write(base64.b64decode(image))
             imageFile.close()
             layer = gimp.pdb.gimp_file_load_layer(img, filepath)
+            LayerData(layer).save({"info": infotexts[index], "seed": seeds[index]})
             pdb.gimp_layer_set_name(layer, "Generated Layer")
             layers.append(layer)
+            gimp.pdb.gimp_image_insert_layer(img, layer, None, -1)
+
+            index += 1
 
         gimp.pdb.gimp_context_set_foreground(color)
         self.layers = layers
@@ -718,7 +742,6 @@ class Layers():
             layer.add_mask(mask)
         return self
 
-
 def handleConfig(image, drawable, *args):
     StableGimpfusionPlugin(image).config(*args)
 
@@ -728,26 +751,29 @@ def handleChangeModel(image, drawable, *args):
 def handleImageToImage(image, drawable, *args):
     StableGimpfusionPlugin(image).imageToImage(*args)
 
-def handleImageToImageFromLayersContext(image, drawable, run_type, *args):
+def handleImageToImageFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).imageToImage(*args)
 
 def handleInpainting(image, drawable, *args):
     StableGimpfusionPlugin(image).inpainting(*args)
 
-def handleInpaintingFromLayersContext(image, drawable, run_type, *args):
+def handleInpaintingFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).inpainting(*args)
 
 def handleTextToImage(image, drawable, *args):
     StableGimpfusionPlugin(image).textToImage(*args)
 
-def handleTextToImageFromLayersContext(image, drawable, run_type, *args):
+def handleTextToImageFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).textToImage(*args)
 
 def handleControlNetLayerConfig(image, drawable, *args):
     StableGimpfusionPlugin(image).saveControlLayer(*args)
 
-def handleControlNetLayerConfigFromLayersContext(image, drawable, run_type, *args):
+def handleControlNetLayerConfigFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).saveControlLayer(*args)
+
+def handleShowLayerInfoContext(image, drawable, *args):
+    StableGimpfusionPlugin(image).showLayerInfo(*args)
 
 PLUGIN_FIELDS_IMAGE = [
         (PF_IMAGE, "image", "Image", None),
@@ -757,12 +783,13 @@ PLUGIN_FIELDS_IMAGE = [
 PLUGIN_FIELDS_LAYERS = [
         (PF_IMAGE, "image", "Image", None),
         (PF_LAYER, "layer", "Layer", None),
-        (PF_INT32, "run_type", "Ignore", 0),
         ]
 
 PLUGIN_FIELDS_COMMON = [
         (PF_TEXT, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
-        (PF_TEXT, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"])
+        (PF_TEXT, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
+        (PF_INT32, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
+        (PF_INT8, "batch_size", "Batch Size (optional)", 1),
         ]
 
 PLUGIN_FIELDS_CONTROLNET = [
@@ -776,7 +803,7 @@ PLUGIN_FIELDS_CONFIG = [
     (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
     (PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
     (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1)),
-    (PF_STRING, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
+    (PF_INT32, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
     (PF_STRING, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
     (PF_STRING, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
     (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]),
@@ -949,6 +976,20 @@ register(
         [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_CONTROLNET,
         [],
         handleControlNetLayerConfigFromLayersContext
+        )
+
+register(
+        "stable-gimpfusion-layer-info-context",
+        "Show stable gimpfusion info associated with this layer",
+        "Layer Info",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Layers>/GimpFusion/Layer Info",
+        "*",
+        [] + PLUGIN_FIELDS_LAYERS,
+        [],
+        handleShowLayerInfoContext
         )
 
 main()
