@@ -11,9 +11,9 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
 [![Stable Gimpfusion Demo](https://img.youtube.com/vi/eJg_-xqu5OY/0.jpg)](https://www.youtube.com/watch?v=eJg_-xqu5OY)
 
 
-
 # Requirements
  - [Automatic1111's StableDiffusion Web-UI API](https://github.com/AUTOMATIC1111/stable-diffusion-webui#installation-and-running)
+ - [Mikubill's StableDiffusion Web-UI ControlNet](https://github.com/Mikubill/sd-webui-controlnet)
 
 # Installation
  - Download the script file [stable-gimpfusion.py](https://github.com/artbit/stable-gimpfusion/raw/master/stable-gimpfusion.py), 
@@ -24,6 +24,8 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
  - Restart Gimp, and you will see a new AI menu item
  - Run script via `AI -> Stable Gimpfusion -> Config` and set the backend API URL base (should be `http://127.0.0.1:7860/sdapi/v1/` by default)
 
-# License
+# Troubleshooting
+ - Make sure you're running the Automatic1111's Web UI in API mode [Automatic1111's StableDiffusion Web-UI API](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API) try accessing [http://127.0.0.1:7860/docs](http://127.0.0.1:7860/docs) to make sure it's running
 
+# License
 [MIT](LICENSE.md)
