@@ -20,7 +20,7 @@ from gimpfu import *
 from gimpshelf import shelf
 from pprint import pprint, pformat
 
-DEBUG = True
+DEBUG = False
 VERSION = 6
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
@@ -199,15 +199,15 @@ class Rect():
         if isinstance(width, Rect):
             self.width = width.width
             self.height = width.height
-            self.scale = width.scale
+            self.orig_scale = width.orig_scale
         elif isinstance(width, list):
             self.width = width[0]
             self.height = width[1]
-            self.scale = float((len(width) == 3 and width[2]) or 1.0)
+            self.orig_scale = float((len(width) == 3 and width[2]) or 1.0)
         elif isinstance(width, tuple):
             self.width = width[0]
             self.height = width[1]
-            self.scale = float((len(width) == 3 and width[2]) or 1.0)
+            self.orig_scale = float((len(width) == 3 and width[2]) or 1.0)
         else:
             if type(width) == int or type(width) == float:
                 self.width = width
@@ -221,43 +221,42 @@ class Rect():
                 global DEBUG
                 if DEBUG:
                     raise Exception("Height must be of type int or float")
-            self.scale = 1.0
+            self.orig_scale = 1.0
+        self.aspect = float(self.width) / self.height
 
-    def scale(self, new_scale):
-        self.width = float(self.width) / self.scale * new_scale
-        self.height = float(self.height) / self.scale * new_scale
-        self.scale = new_scale
+    def scaleTo(self, new_scale):
+        self.width = float(self.width) * new_scale
+        self.height = float(self.height) * new_scale
+        self.orig_scale = self.orig_scale * new_scale
         return self
 
-    def scaleRectTo(self, target_rect, maximum=True):
-        target = Rect(target_rect)
-        aspect_ratio = float(self.width) / self.height
-        new_width = roundToMultiple(int(target.height * aspect_ratio), 64)
-        new_height = roundToMultiple(int(target.width / aspect_ratio), 64)
-        new_scale = float(new_width) / self.width
-        if maximum or (new_width >= target.width):
-            self.width = new_width or 1
-            self.height = target.height
-            self.scale = new_scale
-        self.width = target.width
-        self.height = new_height or 1
-        self.scale = new_scale
-        return self
+    def fitIntoRect(self, target_rect, force = False):
+        if (self.width < target_rect.width) and (self.height < target_rect.height) and not force:
+            # nothing to do, rect already fits inside target
+            return
+        if self.aspect > target_rect.aspect:
+            scale = float(target_rect.width) / self.width
+        else:
+            scale = float(target_rect.height) / self.height
+        return self.scaleTo(scale)
 
-    def fitIntoRect(self, target_rect):
-        return self.scaleRectTo(target_rect, True)
-
-    def coverRect(self, target_rect):
-        return self.scaleRectTo(target_rect, False)
+    def coverRect(self, target_rect, force = False):
+        if (self.width > target_rect.width) and (self.height > target_rect.height) and not force:
+            # nothing to do, rect already covers target
+            return
+        if self.aspect > target_rect.aspect:
+            scale = float(target_rect.height) / self.height
+        else:
+            scale = float(target_rect.width) / self.width
+        return self.scaleTo(scale)
 
     def fitBetween(self, min_rect, max_rect):
-        min_rect = Rect(min_rect)
-        max_rect = Rect(max_rect)
-        if self.width > max_rect.width or self.height > max_rect.height:
-            self.fitIntoRect(max_rect)
-        elif self.width < min_rect.width or self.height < min_rect.height:
-            self.coverRect(min_rect)
+        self.coverRect(Rect(min_rect))
+        self.fitIntoRect(Rect(max_rect))
         return self
+
+    def __str__ (self):
+        return 'Rect('+", ".join(map(str,[self.width, self.height, self.aspect]))+')'
 
 
 class StableDiffusionOptions():
@@ -399,15 +398,20 @@ class StableGimpfusionPlugin():
     def getActiveLayerAsBase64(self):
         return self.getLayerAsBase64(self.image.active_layer)
 
-    def getLayerMaskAsBase64(self, layer):
+    def getLayerMaskAsBase64(self, layer, scale = 1.0):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(layer.image)
         if non_empty:
             # selection to file
             layer = gimp.Layer(layer.image, "mask", layer.image.width, layer.image.height, RGBA_IMAGE, 100, NORMAL_MODE)
             mask = layer.create_mask(ADD_SELECTION_MASK)
             layer.add_mask(mask)
+            # scale it
+            gimp.pdb.gimp_image_insert_layer(layer.image, layer, None, -1)
+            gimp.pdb.gimp_layer_scale(layer, int(layer.width * scale), int(layer.height * scale), True)
+            # save it
             filepath = self.files.get('selection.png')
             self.drawableToFile(layer.mask, filepath)
+            gimp.pdb.gimp_image_remove_layer(layer.image, layer)
             return self.fileToBase64(filepath)
         elif layer.mask:
             # mask to file
@@ -415,10 +419,10 @@ class StableGimpfusionPlugin():
             self.drawableToFile(layer.mask, filepath)
             return self.fileToBase64(filepath)
         else:
-            return None
+            return ""
 
-    def getActiveMaskAsBase64(self):
-        return self.getLayerMaskAsBase64(self.image.active_layer)
+    def getActiveMaskAsBase64(self, scale = 1.0):
+        return self.getLayerMaskAsBase64(self.image.active_layer, scale)
 
     def getSelectionBounds(self):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(self.image)
@@ -435,7 +439,7 @@ class StableGimpfusionPlugin():
             data = LayerData(cn_layer, CONTROLNET_DEFAULT_SETTINGS).data.copy()
             #if cn_layer != self.image.active_layer:
             data.update({"input_image": self.getLayerAsBase64(cn_layer)})
-            data.update({"mask":""})
+            data.update({"mask": self.getActiveMaskAsBase64()})
             #mask = self.getLayerMaskAsBase64(cn_layer)
             #if mask is not None:
             #    data.update({"mask": mask})
@@ -478,7 +482,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response).scale(1.0/rect.scale)
+            ResponseLayers(image, response).scale(1.0/rect.orig_scale)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.imageToImage")
             global DEBUG
@@ -496,8 +500,8 @@ class StableGimpfusionPlugin():
         width = rect.width
         height = rect.height
 
-        mask = self.getActiveMaskAsBase64()
-        if mask is None:
+        mask = self.getActiveMaskAsBase64(rect.orig_scale)
+        if mask is "":
             print("ERROR: StableGimpfusionPlugin.inpainting")
             raise Exception("Inpainting must use either a selection or layer mask")
 
@@ -533,7 +537,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response).scale(1.0/rect.scale)
+            ResponseLayers(image, response).scale(1.0/rect.orig_scale)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.inpainting")
             global DEBUG
@@ -578,7 +582,7 @@ class StableGimpfusionPlugin():
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
             #disable=pdb.gimp_image_undo_disable(image)
-            ResponseLayers(image, response).scale(1.0/rect.scale).translate((x, y)).addSelectionAsMask()
+            ResponseLayers(image, response).scale(1.0/rect.orig_scale).translate((x, y)).addSelectionAsMask()
             #enable = pdb.gimp_image_undo_enable(image)
         except Exception as ex:
             print("ERROR: StableGimpfusionPlugin.textToImage")
@@ -718,7 +722,7 @@ class ResponseLayers():
     def scale(self, new_scale=1.0):
         if new_scale != 1.0:
             for layer in self.layers:
-                gimp.pdb.gimp_layer_scale(layer, int(layer.width * new_scale), int(layer.height * new_scale), True)
+                gimp.pdb.gimp_layer_scale(layer, int(new_scale * layer.width), int(new_scale * layer.height), True)
         return self
 
     def translate(self, offset=None):
@@ -771,6 +775,9 @@ def handleControlNetLayerConfig(image, drawable, *args):
 
 def handleControlNetLayerConfigFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).saveControlLayer(*args)
+
+def handleShowLayerInfo(image, drawable, *args):
+    StableGimpfusionPlugin(image).showLayerInfo(*args)
 
 def handleShowLayerInfoContext(image, drawable, *args):
     StableGimpfusionPlugin(image).showLayerInfo(*args)
@@ -843,7 +850,7 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Configure",
+        "<Image>/GimpFusion/Config/Global",
         "*",
         PLUGIN_FIELDS_CONFIG,
         [],
@@ -857,7 +864,7 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Change Model",
+        "<Image>/GimpFusion/Config/Change Model",
         "*",
         PLUGIN_FIELDS_CHECKPOINT,
         [],
@@ -976,6 +983,20 @@ register(
         [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_CONTROLNET,
         [],
         handleControlNetLayerConfigFromLayersContext
+        )
+
+register(
+        "stable-gimpfusion-layer-info",
+        "Show stable gimpfusion info associated with this layer",
+        "Layer Info",
+        "ArtBIT",
+        "ArtBIT",
+        "2023",
+        "<Image>/GimpFusion/Config/Layer Info",
+        "*",
+        [],
+        [],
+        handleShowLayerInfo
         )
 
 register(
