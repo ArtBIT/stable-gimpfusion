@@ -2,32 +2,30 @@
 #!/usr/bin/python
 
 # Stable Gimpfusion 
-# v1.0.1
+# v1.0.8
 # Thin API client for Automatic1111's StableDiffusion API
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
 import base64
-import gimp
-import gimpenums
 import json
-import math
 import os
 import random
 import tempfile
+import logging
 import urllib
 import urllib2
+import gimp
+import gimpenums
 from gimpfu import *
 from gimpshelf import shelf
-from pprint import pprint, pformat
-import logging
 
 DEBUG = False
-VERSION = 7
+VERSION = 8
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
 
 if DEBUG:
-    logging.basicConfig(filename='gimpfusion.log', encoding='utf-8', level=logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.WARNING)
 
@@ -36,9 +34,11 @@ STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
         "denoising_strength": 0.8,
         "cfg_scale": 7.5,
         "steps": 50,
-        "seed": -1,
         "prompt": "",
         "negative_prompt": "",
+        "batch_size": 1,
+        "mask_blur": 4,
+        "seed": -1,
         "api_base": "http://127.0.0.1:7860",
         "model": ""
         }
@@ -120,11 +120,11 @@ GENERATION_MESSAGES = [
         "Waiting for the prompt to bake...",
         "Fetching random pixels from the internet",
         "Taking a random screenshot from an AI dream",
-        "Throwing pixels at screen and seeing what happens",
+        "Throwing pixels at screen and seeing what sticks",
         "Converting random internet comment to RGB values",
         "Computer make pretty picture, you happy.",
         "Computer is hand-painting pixels...",
-        "Injecting steroids to Gimp. (Legal ones).",
+        "Turning the Gimp knob up to 11...",
         "Pixelated dreams come true, thanks to AI.",
         "AI is doing its magic...",
         "Pocket Picasso is speed-painting...",
@@ -153,19 +153,6 @@ def deunicodeDict(data):
     return dict((str(k), deunicodeDict(v)) 
         for k, v in data.items())
 
-def deepMapDict(d, cb):
-    d_type = type(d)
-    if d_type is dict:
-        return dict((k, deepMapDict(v, cb)) for k, v in d.iteritems() if v and deepMapDict(v, cb))
-    if d_type is list:
-        return map(lambda k: deepMapDict(k, cb), d)
-    else:
-        return cb(d)
-
-def pprintCompact(o):
-    pprint(deepMapDict(o, lambda o: o if type(o) != str else o[0:10] + "..." if len(o) > 10 else o))
-
-
 class ApiClient():
     """ Simple API client used to interface with StableDiffusion JSON endpoints """
     def __init__(self, base_url):
@@ -177,12 +164,10 @@ class ApiClient():
     def post(self, endpoint, data={}, params={}, headers=None):
         try:
             url = self.base_url + endpoint + "?" + urllib.urlencode(params)
-            print("POST "+url)
-            pprintCompact(data)
-            #pprint(data)
+            logging.debug("POST "+url)
             data = json.dumps(data)
 
-            logging.debug('post data: %s', data)
+            logging.debug('post data %s', data)
 
             headers = headers or {"Content-Type": "application/json", "Accept": "application/json"}
             request = urllib2.Request(url=url, data=data, headers=headers)
@@ -239,8 +224,11 @@ class Rect():
         self.aspect = float(self.width) / self.height
 
     def scaleTo(self, new_scale):
-        self.width = float(self.width) * new_scale
-        self.height = float(self.height) * new_scale
+        new_width = roundToMultiple(float(self.width) * new_scale, 64)
+        new_height = roundToMultiple(float(self.height) * new_scale, 64)
+        new_scale = new_width / self.width
+        self.width = new_width
+        self.height = new_height
         self.orig_scale = self.orig_scale * new_scale
         return self
 
@@ -267,6 +255,7 @@ class Rect():
     def fitBetween(self, min_rect, max_rect):
         self.coverRect(Rect(min_rect))
         self.fitIntoRect(Rect(max_rect))
+        self.scaleTo(1.0)
         return self
 
     def __str__ (self):
@@ -388,16 +377,22 @@ class StableGimpfusionPlugin():
             except Exception as ex:
                 ex = ex
 
-    def getLayerAsBase64(self, layer, scale = 1.0):
-        copy = Layer(layer).copy().insert().scale(scale)
+    def getLayerAsBase64(self, layer, rect = None):
+        # store active_layer
+        active_layer = layer.image.active_layer
+        copy = Layer(layer).copy().insert()
+        if rect is not None:
+            copy.resize(rect.width, rect.height)
         result = copy.toBase64();
         copy.remove()
+        # restore active_layer
+        gimp.pdb.gimp_image_set_active_layer(active_layer.image, active_layer)
         return result
 
-    def getActiveLayerAsBase64(self, scale = 1.0):
-        return self.getLayerAsBase64(self.image.active_layer, scale)
+    def getActiveLayerAsBase64(self, rect = None):
+        return self.getLayerAsBase64(self.image.active_layer, rect)
 
-    def getLayerMaskAsBase64(self, layer, scale = 1.0):
+    def getLayerMaskAsBase64(self, layer, rect = None):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(layer.image)
         if non_empty:
             # selection to base64
@@ -408,23 +403,30 @@ class StableGimpfusionPlugin():
             # selection to file
             #disable=pdb.gimp_image_undo_disable(layer.image)
             tmp_layer = Layer.create(layer.image, "mask", layer.image.width, layer.image.height, RGBA_IMAGE, 100, NORMAL_MODE)
-            tmp_layer.addSelectionAsMask().insert().scale(scale)
+            tmp_layer.addSelectionAsMask().insert()
+
+            if rect is not None:
+                tmp_layer.resize(rect.width, rect.height)
+
             result = tmp_layer.maskToBase64()
             tmp_layer.remove()
             #enable = pdb.gimp_image_undo_enable(layer.image)
 
             # restore active_layer
-            gimp.pdb.gimp_image_set_active_layer(layer.image, active_layer)
+            gimp.pdb.gimp_image_set_active_layer(active_layer.image, active_layer)
 
             return result
         elif layer.mask:
             # mask to file
-            return Layer(layer).scale(scale).maskToBase64()
+            tmp_layer = Layer(layer).scale(scale)
+            if rect is not None:
+                tmp_layer.resize(rect.width, rect.height)
+            return tmp_layer.maskToBase64()
         else:
             return ""
 
-    def getActiveMaskAsBase64(self, scale = 1.0):
-        return self.getLayerMaskAsBase64(self.image.active_layer, scale)
+    def getActiveMaskAsBase64(self, rect = None):
+        return self.getLayerMaskAsBase64(self.image.active_layer, rect)
 
     def getSelectionBounds(self):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(self.image)
@@ -441,7 +443,7 @@ class StableGimpfusionPlugin():
             layer = Layer(cn_layer)
             data = layer.loadData(CONTROLNET_DEFAULT_SETTINGS)
             # ControlNet image size need to be in multiples of 64
-            layer64 = layer.copy().insert().resize64()
+            layer64 = layer.copy().insert().resizeToMultipleOf(64)
             data.update({"input_image": layer64.toBase64()})
             if cn_layer.mask:
                 data.update({"mask": layer64.maskToBase64()})
@@ -449,27 +451,29 @@ class StableGimpfusionPlugin():
             return data
         return None
 
-    def imageToImage(self, resize_mode, prompt, negative_prompt, seed, batch_size, cn_enabled, cn_layer):
+    def imageToImage(self, *args):
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
         image = self.image
         settings = self.settings
+
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
-        width = rect.width #roundToMultiple(rect.width, 64)
-        height = rect.height #roundToMultiple(rect.height, 64)
+        width = rect.width
+        height = rect.height
 
         data = {
             "resize_mode": resize_mode,
-            "init_images": [self.getActiveLayerAsBase64(rect.orig_scale)],
+            "init_images": [self.getActiveLayerAsBase64(rect)],
 
             "prompt": (prompt + " " + settings["prompt"]).strip(),
             "negative_prompt": (negative_prompt + " " +  settings["negative_prompt"]).strip(),
-            "denoising_strength": float(settings["denoising_strength"]),
-            "steps": int(settings["steps"]),
-            "cfg_scale": float(settings["cfg_scale"]),
+            "denoising_strength": float(denoising_strength),
+            "steps": int(steps),
+            "cfg_scale": float(cfg_scale),
             "width": int(width),
             "height": int(height),
-            "sampler_index": settings["sampler_name"],
+            "sampler_index": SAMPLERS[sampler_index],
             "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
-            "seed": seed
+            "seed": seed or -1
         }
 
         try:
@@ -485,7 +489,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response).scale(1.0/rect.orig_scale)
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(image.width, image.height)
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.imageToImage")
@@ -493,37 +497,40 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_end()
             self.cleanup()
 
-    def inpainting(self, resize_mode, prompt, negative_prompt, seed, batch_size, cn_enabled, cn_layer):
-
+    def inpainting(self, *args):
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
         image = self.image
         settings = self.settings
+
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
         width = rect.width
         height = rect.height
-        init_images = [self.getActiveLayerAsBase64(rect.orig_scale)]
-        mask = self.getActiveMaskAsBase64(rect.orig_scale)
+
+        init_images = [self.getActiveLayerAsBase64(rect)]
+        mask = self.getActiveMaskAsBase64(rect)
         if mask == "":
             logging.exception("ERROR: StableGimpfusionPlugin.inpainting")
             raise Exception("Inpainting must use either a selection or layer mask")
 
         data = {
             "mask": mask,
-            "resize_mode": resize_mode,
-            "init_images": init_images,
             "inpaint_full_res": True,
             "inpaint_full_res_padding": 10,
             "inpainting_mask_invert": 0,
 
+            "resize_mode": resize_mode,
+            "init_images": init_images,
+
             "prompt": (prompt + " " + settings["prompt"]).strip(),
             "negative_prompt": (negative_prompt + " " +  settings["negative_prompt"]).strip(),
-            "denoising_strength": float(settings["denoising_strength"]),
-            "steps": int(settings["steps"]),
-            "cfg_scale": float(settings["cfg_scale"]),
-            "width": int(width),
-            "height": int(height),
-            "sampler_index": settings["sampler_name"],
+            "denoising_strength": float(denoising_strength),
+            "steps": int(steps),
+            "cfg_scale": float(cfg_scale),
+            "width": width,
+            "height": height,
+            "sampler_index": SAMPLERS[sampler_index],
             "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
-            "seed": seed
+            "seed": seed or -1
         }
 
         try:
@@ -539,7 +546,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response).scale(1.0/rect.orig_scale)
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(image.width, image.height)
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.inpainting")
@@ -547,9 +554,11 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_end()
             self.cleanup()
 
-    def textToImage(self, prompt, negative_prompt, seed, batch_size, cn_enabled, cn_layer):
+    def textToImage(self, *args):
+        prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
         image = self.image
         settings = self.settings
+
         x, y, width, height = self.getSelectionBounds()
         rect = Rect(width, height).fitBetween((384, 384), (1024, 1024))
         width = rect.width
@@ -558,14 +567,14 @@ class StableGimpfusionPlugin():
         data = {
             "prompt": (prompt + " " + settings["prompt"]).strip(),
             "negative_prompt": (negative_prompt + " " +  settings["negative_prompt"]).strip(),
-            "denoising_strength": float(settings["denoising_strength"]),
-            "steps": int(settings["steps"]),
-            "cfg_scale": float(settings["cfg_scale"]),
+            "cfg_scale": float(cfg_scale),
+            "denoising_strength": float(denoising_strength),
+            "steps": int(steps),
             "width": int(width),
             "height": int(height),
-            "sampler_index": settings["sampler_name"],
+            "sampler_index": SAMPLERS[sampler_index],
             "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
-            "seed": seed
+            "seed": seed or -1
         }
 
         try:
@@ -581,7 +590,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
-            ResponseLayers(image, response).scale(1.0/rect.orig_scale).translate((x, y)).addSelectionAsMask()
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).scale(1.0/rect.orig_scale).translate((x, y)).addSelectionAsMask()
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.textToImage")
@@ -619,15 +628,9 @@ class StableGimpfusionPlugin():
             pdb.gimp_layer_set_name(active_layer, "ControlNet Layer")
         cnlayer.save(settings)
 
-    def config(self, mask_blur, denoising_strength, cfg_scale, sampler_index, steps, seed, prompt, negative_prompt, url):
+    def config(self, prompt, negative_prompt, url):
         #model = sd_data.get("models")[model]
         settings = {
-            "mask_blur": mask_blur,
-            "denoising_strength": denoising_strength,
-            "cfg_scale": cfg_scale,
-            "sampler_name": SAMPLERS[sampler_index],
-            "steps": steps,
-            "seed": seed,
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "api_base": url,
@@ -734,8 +737,12 @@ class Layer():
             gimp.pdb.gimp_layer_scale(self.layer, int(new_scale * self.layer.width), int(new_scale * self.layer.height), False)
         return self
 
-    def resize64(self):
-        gimp.pdb.gimp_layer_scale(self.layer, roundToMultiple(self.layer.width, 64), roundToMultiple(self.layer.height, 64), False)
+    def resize(self, width, height):
+        logging.info("Resizing to %dx%d", width, height)
+        gimp.pdb.gimp_layer_scale(self.layer, width, height, False)
+
+    def resizeToMultipleOf(self, multiple):
+        gimp.pdb.gimp_layer_scale(self.layer, roundToMultiple(self.layer.width, multiple), roundToMultiple(self.layer.height, multiple), False)
         return self
 
     def translate(self, offset=None):
@@ -783,16 +790,16 @@ class Layer():
 
 
 class ResponseLayers():
-    def __init__(self, img, response):
+    def __init__(self, img, response, options = {}):
         self.image = img
         color = gimp.pdb.gimp_context_get_foreground()
         gimp.pdb.gimp_context_set_foreground((0, 0, 0))
 
+        layers = []
         try:
             info = json.loads(response["info"])
             infotexts = info["infotexts"]
             seeds = info["all_seeds"]
-            layers = []
             index = 0
             logging.debug(infotexts)
             logging.debug(seeds)
@@ -800,9 +807,11 @@ class ResponseLayers():
             for image in response["images"]:
                 if index < total_images:
                     layer_data = {"info": infotexts[index], "seed": seeds[index]}
-                    layer = Layer.fromBase64(img, image).rename("Generated Layer").saveData(layer_data).insertTo(img)
+                    layer = Layer.fromBase64(img, image).rename("Generated Layer "+str(seeds[index])).saveData(layer_data).insertTo(img)
                 else:
-                    layer = Layer.fromBase64(img, image).rename("Annotator Layer").insertTo(img)
+                    # annotator layers
+                    if "skip_annotator_layers" in options and not options["skip_annotator_layers"]:
+                        layer = Layer.fromBase64(img, image).rename("Annotator Layer").insertTo(img)
                 layers.append(layer.layer)
                 index += 1
         except Exception as e:
@@ -815,6 +824,11 @@ class ResponseLayers():
         if new_scale != 1.0:
             for layer in self.layers:
                 Layer(layer).scale(new_scale)
+        return self
+
+    def resize(self, width, height):
+        for layer in self.layers:
+            Layer(layer).resize(width, height)
         return self
 
     def translate(self, offset=None):
@@ -886,24 +900,24 @@ PLUGIN_FIELDS_LAYERS = [
 PLUGIN_FIELDS_COMMON = [
         (PF_TEXT, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
         (PF_TEXT, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
-        (PF_INT32, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
-        (PF_INT8, "batch_size", "Batch Size (optional)", 1),
+        (PF_INT32, "seed", "Seed", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
+        (PF_SLIDER, "batch_size", "Batch count", STABLE_GIMPFUSION_DEFAULT_SETTINGS["batch_size"], (1, 20, 1.0)),
+        (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1.0)),
+        (PF_SLIDER, "mask_blur", "Mask Blur", STABLE_GIMPFUSION_DEFAULT_SETTINGS["mask_blur"], (1, 10, 1.0)),
+        (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
+        (PF_SLIDER, "denoising_strength", "Denoising Strength", STABLE_GIMPFUSION_DEFAULT_SETTINGS["denoising_strength"], (0.0, 1.0, 0.1)),
+        (PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
         ]
 
-PLUGIN_FIELDS_CONTROLNET = [
-        (PF_TOGGLE, "cnet_enabled", "Enable ControlNet", False),
-        (PF_LAYER, "cnet_layer", "ControlNet Layer", None)
+PLUGIN_FIELDS_CONTROLNET_OPTIONS = [
+        (PF_TOGGLE, "cn_enabled", "Enable ControlNet", False),
+        (PF_LAYER, "cn_layer", "ControlNet Layer", None),
+        (PF_TOGGLE, "cn_skip_annotator_layers", "Skip annotator layers", True),
         ]
 
 PLUGIN_FIELDS_CONFIG = [
-    (PF_INT8, "mask_blur", "Mask Blur", 4),
-    (PF_SLIDER, "denoising_strength", "Denoising Strength", STABLE_GIMPFUSION_DEFAULT_SETTINGS["denoising_strength"], (0.0, 1.0, 0.1)),
-    (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
-    (PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
-    (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1)),
-    (PF_INT32, "seed", "Seed (optional)", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
-    (PF_STRING, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
-    (PF_STRING, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
+    (PF_STRING, "prompt", "Prompt Suffix", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
+    (PF_STRING, "negative_prompt", "Negative Prompt Suffix", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
     (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]),
     ]
 
@@ -914,10 +928,10 @@ if sd_model_checkpoint is not None:
 else:
     PLUGIN_FIELDS_CHECKPOINT = []
 
-PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET
 
 PLUGIN_FIELDS_RESIZE_MODE = [(PF_OPTION, "resize_mode", "Resize Mode", 0, tuple(RESIZE_MODES.keys()))]
-PLUGIN_FIELDS_IMG2IMG = [] + PLUGIN_FIELDS_RESIZE_MODE + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET
+PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET_OPTIONS
+PLUGIN_FIELDS_IMG2IMG = [] + PLUGIN_FIELDS_RESIZE_MODE + PLUGIN_FIELDS_TXT2IMG
 
 PLUGIN_FIELDS_CONTROLNET = [] + [
         (PF_OPTION, "module", "Module", 0, CONTROLNET_MODULES),
@@ -1105,4 +1119,3 @@ register(
         )
 
 main()
-
