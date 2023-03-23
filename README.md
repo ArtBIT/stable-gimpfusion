@@ -8,7 +8,7 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
 
 # Example usage
 
-[![Stable Gimpfusion Demo](https://img.youtube.com/vi/eJg_-xqu5OY/0.jpg)](https://www.youtube.com/watch?v=eJg_-xqu5OY)
+[![Stable Gimpfusion Demo](https://img.youtube.com/vi/4IuIKe1sEFY/0.jpg)](https://www.youtube.com/watch?v=4IuIKe1sEFY)
 
 
 # Requirements
