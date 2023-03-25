@@ -16,7 +16,7 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
  - [Mikubill's StableDiffusion Web-UI ControlNet](https://github.com/Mikubill/sd-webui-controlnet)
 
 # Installation
- - Download the script file [stable-gimpfusion.py](https://github.com/artbit/stable-gimpfusion/raw/master/stable-gimpfusion.py), 
+ - Download the script file [stable-gimpfusion.py](https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/stable-gimpfusion.py), 
  save into your gimp plug-ins directory, ie: 
    - Linux: `$HOME/.gimp-2.10/plug-ins/` or `$XDG_CONFIG_HOME/GIMP/2.10/plug-ins/`
    - Windows: `%APPDATA%\GIMP\2.10\plug-ins\` or `C:\Users\{your_id}\AppData\Roaming\GIMP\2.10\plug-ins\`
