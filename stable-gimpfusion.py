@@ -1,5 +1,5 @@
+#!/usr/bin/env python
 # vim: set noai ts=4 sw=4 expandtab
-#!/usr/bin/python
 
 # Stable Gimpfusion 
 # v1.0.8
@@ -21,6 +21,7 @@ from gimpshelf import shelf
 
 DEBUG = False
 VERSION = 8
+PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
 
@@ -183,7 +184,6 @@ class ApiClient():
     def get(self, endpoint, params={}, headers=None):
         try:
             url = self.base_url + endpoint + "?" + urllib.urlencode(params)
-            print("GET "+url)
             headers = headers or {"Content-Type": "application/json", "Accept": "application/json"}
             request = urllib2.Request(url=url, headers=headers)
             response = urllib2.urlopen(request)
@@ -266,7 +266,8 @@ class StableDiffusionOptions():
     """ Helper class to interface with the StableDiffusion options endpoint.
         Used to change the checkpoint model.
     """
-    def __init__(self, api):
+    def __init__(self):
+        global api
         self.name = "stable_diffusion_options"
         self.options = {}
         self.api = api
@@ -309,7 +310,7 @@ class DynamicDropdownData():
             pass
 
     def fetch(self):
-        api = ApiClient(self.settings["api_base"])
+        global api
         try:
             self.settings["models"] = map(lambda data: data["title"], api.get("/sdapi/v1/sd-models") or [])
             self.settings["cn_models"] = api.get("/controlnet/model_list")["model_list"] or []
@@ -325,6 +326,7 @@ class DynamicDropdownData():
             return self.settings[name]
         return default_value
 
+api = ApiClient(settings.get("api_base"))
 sd_data = DynamicDropdownData()
 models = sd_data.get("models", [])
 sd_model_checkpoint = sd_data.get("sd_model_checkpoint")
@@ -332,6 +334,7 @@ is_server_running = sd_data.get("is_server_running")
 
 class StableGimpfusionPlugin():
     def __init__(self, image):
+        global settings,api
         self.name = "stable_gimpfusion"
         self.image = image
         self.loadSettings()
@@ -341,9 +344,9 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_message("It seems that StableDiffusion is not runing on "+self.settings["api_base"])
 
         try:
-            self.api = ApiClient(self.settings["api_base"])
+            self.api = api
             self.files = TempFiles()
-            self.options = StableDiffusionOptions(self.api)
+            self.options = StableDiffusionOptions()
         except Exception as e:
             logging.exception("ERROR: StableGimpfusionPlugin.__init__")
 
@@ -860,29 +863,29 @@ def handleChangeModel(image, drawable, *args):
 def handleImageToImage(image, drawable, *args):
     StableGimpfusionPlugin(image).imageToImage(*args)
 
-def handleImageToImageFromLayersContext(image, drawable, *args):
-    StableGimpfusionPlugin(image).imageToImage(*args)
-
 def handleInpainting(image, drawable, *args):
-    StableGimpfusionPlugin(image).inpainting(*args)
-
-def handleInpaintingFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).inpainting(*args)
 
 def handleTextToImage(image, drawable, *args):
     StableGimpfusionPlugin(image).textToImage(*args)
 
-def handleTextToImageFromLayersContext(image, drawable, *args):
-    StableGimpfusionPlugin(image).textToImage(*args)
-
 def handleControlNetLayerConfig(image, drawable, *args):
-    StableGimpfusionPlugin(image).saveControlLayer(*args)
-
-def handleControlNetLayerConfigFromLayersContext(image, drawable, *args):
     StableGimpfusionPlugin(image).saveControlLayer(*args)
 
 def handleShowLayerInfo(image, drawable, *args):
     StableGimpfusionPlugin(image).showLayerInfo(*args)
+
+def handleImageToImageFromLayersContext(image, drawable, *args):
+    StableGimpfusionPlugin(image).imageToImage(*args)
+
+def handleInpaintingFromLayersContext(image, drawable, *args):
+    StableGimpfusionPlugin(image).inpainting(*args)
+
+def handleTextToImageFromLayersContext(image, drawable, *args):
+    StableGimpfusionPlugin(image).textToImage(*args)
+
+def handleControlNetLayerConfigFromLayersContext(image, drawable, *args):
+    StableGimpfusionPlugin(image).saveControlLayer(*args)
 
 def handleShowLayerInfoContext(image, drawable, *args):
     StableGimpfusionPlugin(image).showLayerInfo(*args)
@@ -955,11 +958,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Config/Global",
-        "*",
-        PLUGIN_FIELDS_CONFIG,
+        "Global",
+        "*",      # Alternately use RGB, RGB*, GRAY*, INDEXED etc.
+        [] + PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CONFIG,
         [],
-        handleConfig
+        handleConfig, menu="<Image>/GimpFusion/Config",
         )
 
 register(
@@ -969,11 +972,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Config/Change Model",
+        "Change Model",
         "*",
-        PLUGIN_FIELDS_CHECKPOINT,
+        [] + PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CHECKPOINT,
         [],
-        handleChangeModel
+        handleChangeModel, menu="<Image>/GimpFusion/Config"
         )
 
 register(
@@ -983,11 +986,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Text to image",
+        "Text to image",
         "*",
-        [] + PLUGIN_FIELDS_TXT2IMG,
+        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_TXT2IMG,
         [],
-        handleTextToImage
+        handleTextToImage, menu="<Image>/GimpFusion"
         )
 
 
@@ -998,11 +1001,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Layers>/GimpFusion/Text to image",
+        "Text to image",
         "*",
         [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_TXT2IMG,
         [],
-        handleTextToImageFromLayersContext
+        handleTextToImageFromLayersContext, menu="<Layers>/GimpFusion"
         )
 
 
@@ -1013,11 +1016,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Image to image",
+        "Image to image",
         "*",
-        [] + PLUGIN_FIELDS_IMG2IMG,
+        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
         [],
-        handleImageToImage
+        handleImageToImage, menu="<Image>/GimpFusion"
         )
 
 register(
@@ -1027,11 +1030,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Layers>/GimpFusion/Image to image",
+        "Image to image",
         "*",
         [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
         [],
-        handleImageToImageFromLayersContext
+        handleImageToImageFromLayersContext, menu="<Layers>/GimpFusion"
         )
 
 register(
@@ -1041,11 +1044,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Inpainting",
+        "Inpainting",
         "*",
-        [] + PLUGIN_FIELDS_IMG2IMG,
+        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
         [],
-        handleInpainting
+        handleInpainting, menu="<Image>/GimpFusion"
         )
 
 register(
@@ -1055,11 +1058,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Layers>/GimpFusion/Inpainting",
+        "Inpainting",
         "*",
         [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
         [],
-        handleInpaintingFromLayersContext
+        handleInpaintingFromLayersContext, menu="<Layers>/GimpFusion"
         )
 
 register(
@@ -1069,11 +1072,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Active layer as ControlNet",
+        "Active layer as ControlNet",
         "*",
-        [] + PLUGIN_FIELDS_CONTROLNET,
+        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CONTROLNET,
         [],
-        handleControlNetLayerConfig
+        handleControlNetLayerConfig, menu="<Image>/GimpFusion"
         )
 
 register(
@@ -1083,11 +1086,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Layers>/GimpFusion/Use as ControlNet",
+        "Use as ControlNet",
         "*",
         [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_CONTROLNET,
         [],
-        handleControlNetLayerConfigFromLayersContext
+        handleControlNetLayerConfigFromLayersContext, menu="<Layers>/GimpFusion"
         )
 
 register(
@@ -1097,11 +1100,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Image>/GimpFusion/Config/Layer Info",
+        "Layer Info",
         "*",
+        [] + PLUGIN_FIELDS_IMAGE,
         [],
-        [],
-        handleShowLayerInfo
+        handleShowLayerInfo, menu="<Image>/GimpFusion/Config"
         )
 
 register(
@@ -1111,11 +1114,11 @@ register(
         "ArtBIT",
         "ArtBIT",
         "2023",
-        "<Layers>/GimpFusion/Layer Info",
+        "Layer Info",
         "*",
         [] + PLUGIN_FIELDS_LAYERS,
         [],
-        handleShowLayerInfoContext
+        handleShowLayerInfoContext, menu="<Layers>/GimpFusion"
         )
 
 main()
