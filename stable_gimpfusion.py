@@ -173,7 +173,7 @@ class ApiClient():
     def post(self, endpoint, data={}, params={}, headers=None):
         try:
             url = self.base_url + endpoint + "?" + urllib.urlencode(params)
-            logging.debug("POST "+url)
+            logging.debug("POST %s" % url)
             data = json.dumps(data)
 
             logging.debug('post data %s', data)
@@ -192,7 +192,7 @@ class ApiClient():
     def get(self, endpoint, params={}, headers=None):
         try:
             url = self.base_url + endpoint + "?" + urllib.urlencode(params)
-            logging.debug("POST "+url)
+            logging.debug("POST %s" % url)
             headers = headers or {"Content-Type": "application/json", "Accept": "application/json"}
             request = urllib2.Request(url=url, headers=headers)
             response = urllib2.urlopen(request)
@@ -404,7 +404,7 @@ class StableGimpfusionPlugin():
             return result
         elif layer.mask:
             # mask to file
-            tmp_layer = Layer(layer).scale(scale)
+            tmp_layer = Layer(layer)
             if rect is not None:
                 tmp_layer.resize(rect.width, rect.height)
             return tmp_layer.maskToBase64()
@@ -681,7 +681,6 @@ class LayerData():
     def save(self, data):
         parasite = gimp.Parasite(self.name, gimpenums.PARASITE_PERSISTENT, deunicodeDict(json.dumps(data)))
         self.layer.parasite_attach(parasite)
-
 
 layer_id = 1
 class Layer():
