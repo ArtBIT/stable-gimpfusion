@@ -1,4 +1,28 @@
 {
-  "version": 8,
-  "message": "There is newer version of the StableGimpfusion plugin available! It introduces basic ControlNet support."
+  "version": 9,
+  "message": "Fixes an issue with the Mac OSX version of GIMP. Added persistent json storage.",
+
+  "history": [
+    {
+      "version": 8,
+      "message": "There is newer version of the StableGimpfusion plugin available! It introduces basic ControlNet support."
+    },
+    {
+      "version": 7,
+      "message": "There is newer version of the StableGimpfusion plugin available! It introduces basic ControlNet support."
+    },
+    {
+      "version": 6,
+      "message": "There is newer version of the StableGimpfusion plugin available! It introduces basic ControlNet support."
+    },
+    {
+      "version": 5,
+      "message": "There is newer version of the StableGimpfusion plugin available! It introduces basic ControlNet support."
+    },
+    { "version": 2, "message": "Basic ControlNet support" },
+    {
+      "version": 1,
+      "message": "New version of stable-diffusion local plugin is available. Please update! Please also rebuild your server."
+    }
+  ]
 }

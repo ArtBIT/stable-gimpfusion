@@ -14,21 +14,32 @@ import tempfile
 import logging
 import urllib
 import urllib2
+
 import gimp
 import gimpenums
-from gimpfu import *
-from gimpshelf import shelf
+import gimpfu
 
-DEBUG = False
-VERSION = 8
+VERSION = 9
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
 
-if DEBUG:
+# Initialize debugging
+if os.environ.get('DEBUG'):
+    DEBUG = True
     logging.basicConfig(level=logging.DEBUG)
 else:
-    logging.basicConfig(level=logging.WARNING)
+    DEBUG = False
+    logging.basicConfig(level=logging.INFO)
+
+
+# GLOBALS
+settings = None
+api = None
+models = None
+sd_model_checkpoint = None
+is_server_running = False
+
 
 STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
         "sampler_name": "Euler a",
@@ -41,7 +52,11 @@ STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
         "mask_blur": 4,
         "seed": -1,
         "api_base": "http://127.0.0.1:7860",
-        "model": ""
+        "model": "",
+        "models": [],
+        "cn_models": [],
+        "sd_model_checkpoint": None,
+        "is_server_running": False
         }
 
 RESIZE_MODES = {
@@ -134,13 +149,6 @@ GENERATION_MESSAGES = [
         "Waiting for the digital paint to dry..."
         ]
 
-STABLE_GIMPFUSION_DATA = {
-        "models": [],
-        "cn_models": [],
-        "api_base": STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"],
-        "sd_model_checkpoint": None,
-        "is_server_running": False
-        }
 
 def roundToMultiple(value, multiple):
     return multiple * round(float(value)/multiple)
@@ -184,6 +192,7 @@ class ApiClient():
     def get(self, endpoint, params={}, headers=None):
         try:
             url = self.base_url + endpoint + "?" + urllib.urlencode(params)
+            logging.debug("POST "+url)
             headers = headers or {"Content-Type": "application/json", "Accept": "application/json"}
             request = urllib2.Request(url=url, headers=headers)
             response = urllib2.urlopen(request)
@@ -262,104 +271,78 @@ class Rect():
         return 'Rect('+", ".join(map(str,[self.width, self.height, self.aspect]))+')'
 
 
-class StableDiffusionOptions():
-    """ Helper class to interface with the StableDiffusion options endpoint.
-        Used to change the checkpoint model.
-    """
-    def __init__(self):
-        global api
-        self.name = "stable_diffusion_options"
-        self.options = {}
-        self.api = api
-        try:
-            self.load()
-        except Exception as ex:
-            global DEBUG
-            if DEBUG:
-                raise ex
+""" Get the StableDiffusion data needed for dynamic gimpfu.PF_OPTION lists """
+def fetch_stablediffusion_options():
+    global api, settings
+    try:
+        options = deunicodeDict(api.get("/sdapi/v1/options") or {})
+        sd_model_checkpoint = options.get("sd_model_checkpoint", None)
+        models = map(lambda data: data["title"], api.get("/sdapi/v1/sd-models") or [])
+        cn_models = (api.get("/controlnet/model_list") or {}).get("model_list", [])
+        cn_models = ["None"] + cn_models
 
-    def load(self):
+        settings.save({"models": models,
+            "cn_models": cn_models,
+            "sd_model_checkpoint": sd_model_checkpoint,
+            "is_server_running": True})
+    except Exception as ex:
+        logging.exception("ERROR: DynamicDropdownData.fetch")
+        settings.save({"is_server_running", False})
+
+# We need persistent data before the gimp system has initialized so we cannot use parasites nor gimpshelf
+class MyShelf():
+    """ GimpShelf is not available at init time, so we keep our persistent data in a json file """
+    def __init__(self, default_shelf = {}):
+        self.file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'stable_gimpfusion.json')
+        self.load(default_shelf)
+
+    def load(self, default_shelf = {}):
+        self.data = default_shelf
         try:
-            self.options = self.api.get("/sdapi/v1/options") or {}
-        except Exception as ex:
-            logging.exception("ERROR: StableDiffusionOptions.load")
+            if os.path.isfile(self.file_path):
+                logging.info("Loading shelf from %s" % self.file_path)
+                with open(self.file_path, "r") as f:
+                    self.data = json.load(f)
+                logging.info("Successfully loaded shelf")
+        except Exception as e:
+            logging.debug(e)
+
+    def save(self, data = {}):
+        try:
+            self.data.update(data)
+            logging.info("Saving shelf to %s" % self.file_path)
+            with open(self.file_path, "w") as f:
+                json.dump(self.data, f)
+            logging.info("Successfully saved shelf")
+
+        except Exception as e:
+            logging.debug(e)
+
 
     def get(self, name, default_value=None):
-        if name in self.options:
-            return self.options[name]
+        if name in self.data:
+            return self.data[name]
         return default_value
 
-    def set(self, name, value):
-        try:
-            data = {}
-            data[name] = value
-            self.api.post("/sdapi/v1/options", data=data)
-            self.options[name] = value
-        except Exception as ex:
-            logging.exception("ERROR: StableDiffusionOptions.set")
-
-
-class DynamicDropdownData():
-    """ Get the StableDiffusion data needed for dynamic PF_OPTION lists """
-    def __init__(self):
-        self.name = "stable_diffusion_data"
-        self.settings = STABLE_GIMPFUSION_DATA.copy()
-        try:
-            self.fetch()
-        except Exception as ex:
-            pass
-
-    def fetch(self):
-        global api
-        try:
-            self.settings["models"] = map(lambda data: data["title"], api.get("/sdapi/v1/sd-models") or [])
-            self.settings["cn_models"] = api.get("/controlnet/model_list")["model_list"] or []
-            options = api.get("/sdapi/v1/options")
-            self.settings["sd_model_checkpoint"] = options["sd_model_checkpoint"] or None
-            self.settings["is_server_running"] = True
-        except Exception as ex:
-            logging.exception("ERROR: DynamicDropdownData.fetch")
-            self.settings["is_server_running"] = False
-
-    def get(self, name, default_value=None):
-        if name in self.settings:
-            return self.settings[name]
-        return default_value
-
-api = ApiClient(settings.get("api_base"))
-sd_data = DynamicDropdownData()
-models = sd_data.get("models", [])
-sd_model_checkpoint = sd_data.get("sd_model_checkpoint")
-is_server_running = sd_data.get("is_server_running")
+    def set(self, name, default_value=None):
+        self.data[name] = default_value
+        self.save()
 
 class StableGimpfusionPlugin():
     def __init__(self, image):
         global settings,api
         self.name = "stable_gimpfusion"
         self.image = image
-        self.loadSettings()
 
         global is_server_running
         if not is_server_running:
-            gimp.pdb.gimp_message("It seems that StableDiffusion is not runing on "+self.settings["api_base"])
+            gimp.pdb.gimp_message("It seems that StableDiffusion is not runing on "+settings.get("api_base"))
 
         try:
             self.api = api
             self.files = TempFiles()
-            self.options = StableDiffusionOptions()
         except Exception as e:
             logging.exception("ERROR: StableGimpfusionPlugin.__init__")
-
-    def loadSettings(self):
-        parasite = self.image.parasite_find(self.name)
-        if not parasite:
-            self.settings = deunicodeDict(STABLE_GIMPFUSION_DEFAULT_SETTINGS)
-        else:
-            self.settings = deunicodeDict(json.loads(parasite.data))
-
-    def saveSettings(self, settings):
-        parasite = gimp.Parasite(self.name, gimpenums.PARASITE_PERSISTENT, deunicodeDict(json.dumps(settings)))
-        self.image.parasite_attach(parasite)
 
     def checkUpdate(self):
         try:
@@ -455,9 +438,9 @@ class StableGimpfusionPlugin():
         return None
 
     def imageToImage(self, *args):
+        global settings
         resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
         image = self.image
-        settings = self.settings
 
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
         width = rect.width
@@ -467,8 +450,8 @@ class StableGimpfusionPlugin():
             "resize_mode": resize_mode,
             "init_images": [self.getActiveLayerAsBase64(rect)],
 
-            "prompt": (prompt + " " + settings["prompt"]).strip(),
-            "negative_prompt": (negative_prompt + " " +  settings["negative_prompt"]).strip(),
+            "prompt": (prompt + " " + settings.get("prompt")).strip(),
+            "negative_prompt": (negative_prompt + " " +  settings.get("negative_prompt")).strip(),
             "denoising_strength": float(denoising_strength),
             "steps": int(steps),
             "cfg_scale": float(cfg_scale),
@@ -501,9 +484,9 @@ class StableGimpfusionPlugin():
             self.cleanup()
 
     def inpainting(self, *args):
+        global settings
         resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
         image = self.image
-        settings = self.settings
 
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
         width = rect.width
@@ -524,8 +507,8 @@ class StableGimpfusionPlugin():
             "resize_mode": resize_mode,
             "init_images": init_images,
 
-            "prompt": (prompt + " " + settings["prompt"]).strip(),
-            "negative_prompt": (negative_prompt + " " +  settings["negative_prompt"]).strip(),
+            "prompt": (prompt + " " + settings.get("prompt")).strip(),
+            "negative_prompt": (negative_prompt + " " +  settings.get("negative_prompt")).strip(),
             "denoising_strength": float(denoising_strength),
             "steps": int(steps),
             "cfg_scale": float(cfg_scale),
@@ -558,9 +541,9 @@ class StableGimpfusionPlugin():
             self.cleanup()
 
     def textToImage(self, *args):
+        global settings
         prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
         image = self.image
-        settings = self.settings
 
         x, y, width, height = self.getSelectionBounds()
         rect = Rect(width, height).fitBetween((384, 384), (1024, 1024))
@@ -568,8 +551,8 @@ class StableGimpfusionPlugin():
         height = rect.height
 
         data = {
-            "prompt": (prompt + " " + settings["prompt"]).strip(),
-            "negative_prompt": (negative_prompt + " " +  settings["negative_prompt"]).strip(),
+            "prompt": (prompt + " " + settings.get("prompt")).strip(),
+            "negative_prompt": (negative_prompt + " " +  settings.get("negative_prompt")).strip(),
             "cfg_scale": float(cfg_scale),
             "denoising_strength": float(denoising_strength),
             "steps": int(steps),
@@ -610,8 +593,9 @@ class StableGimpfusionPlugin():
 
     def saveControlLayer(self, module, model, weight, resize_mode, lowvram, guessmode, guidance_start, guidance_end, guidance, processor_res, threshold_a, threshold_b):
         """ Take the form params and save them to the layer as gimp.Parasite """
-        cn_models = sd_data.get("cn_models", [])
-        settings = {
+        global settings
+        cn_models = settings.get("cn_models", [])
+        cn_settings = {
             "module": CONTROLNET_MODULES[module],
             "model": cn_models[model],
             "weight": weight,
@@ -628,23 +612,27 @@ class StableGimpfusionPlugin():
         active_layer = self.image.active_layer
         cnlayer = LayerData(active_layer, CONTROLNET_DEFAULT_SETTINGS)
         if not cnlayer.had_parasite:
-            pdb.gimp_layer_set_name(active_layer, "ControlNet Layer")
-        cnlayer.save(settings)
+            gimp.pdb.gimp_layer_set_name(active_layer, "ControlNet Layer")
+        cnlayer.save(cn_settings)
 
     def config(self, prompt, negative_prompt, url):
-        #model = sd_data.get("models")[model]
-        settings = {
+        global settings
+        settings.save({
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "api_base": url,
-        }
-        self.saveSettings(settings)
+        })
 
     def changeModel(self, model):
-        if self.settings["model"] != model:
+        global settings
+        if settings.get("model") != model:
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text("Changing model...")
-            self.options.set("sd_model_checkpoint", model)
+            try:
+                self.api.post("/sdapi/v1/options", { "sd_model_checkpoint", model } )
+                settings.set("sd_model_checkpoint", model)
+            except Exception as e:
+                logging.error(e)
             gimp.pdb.gimp_progress_end()
 
 
@@ -721,7 +709,7 @@ class Layer():
 
 
     def rename(self, name):
-        pdb.gimp_layer_set_name(self.layer, name)
+        gimp.pdb.gimp_layer_set_name(self.layer, name)
         return self;
 
     def saveData(self, data):
@@ -855,9 +843,11 @@ class ResponseLayers():
         return self
 
 def handleConfig(image, drawable, *args):
+    print((image, drawable, args))
     StableGimpfusionPlugin(image).config(*args)
 
 def handleChangeModel(image, drawable, *args):
+    logging.info(image, drawable, *args)
     StableGimpfusionPlugin(image).changeModel(*args)
 
 def handleImageToImage(image, drawable, *args):
@@ -890,235 +880,251 @@ def handleControlNetLayerConfigFromLayersContext(image, drawable, *args):
 def handleShowLayerInfoContext(image, drawable, *args):
     StableGimpfusionPlugin(image).showLayerInfo(*args)
 
-PLUGIN_FIELDS_IMAGE = [
-        (PF_IMAGE, "image", "Image", None),
-        (PF_DRAWABLE, "drawable", "Drawable", None),
+def init_plugin():
+    global settings, api, sd_model, models, is_server_running
+
+    settings = MyShelf(STABLE_GIMPFUSION_DEFAULT_SETTINGS)
+    api = ApiClient(settings.get("api_base"))
+    if settings.get("sd_model_checkpoint", None) is None:
+        fetch_stablediffusion_options()
+    models = settings.get("models", [])
+    sd_model_checkpoint = settings.get("sd_model_checkpoint")
+    is_server_running = settings.get("is_server_running")
+    logging.info(settings)
+
+
+    PLUGIN_FIELDS_IMAGE = [
+            (gimpfu.PF_IMAGE, "image", "Image", None),
+            (gimpfu.PF_DRAWABLE, "drawable", "Drawable", None),
+            ]
+
+    PLUGIN_FIELDS_LAYERS = [
+            (gimpfu.PF_IMAGE, "image", "Image", None),
+            (gimpfu.PF_LAYER, "layer", "Layer", None),
+            ]
+
+    PLUGIN_FIELDS_COMMON = [
+            (gimpfu.PF_TEXT, "prompt", "Prompt", settings.get("prompt")),
+            (gimpfu.PF_TEXT, "negative_prompt", "Negative Prompt", settings.get("negative_prompt")),
+            (gimpfu.PF_INT32, "seed", "Seed", settings.get("seed")),
+            (gimpfu.PF_SLIDER, "batch_size", "Batch count", settings.get("batch_size"), (1, 20, 1.0)),
+            (gimpfu.PF_SLIDER, "steps", "Steps", settings.get("steps"), (10, 150, 1.0)),
+            (gimpfu.PF_SLIDER, "mask_blur", "Mask Blur", settings.get("mask_blur"), (1, 10, 1.0)),
+            (gimpfu.PF_SLIDER, "cfg_scale", "CFG Scale", settings.get("cfg_scale"), (0, 20, 0.5)),
+            (gimpfu.PF_SLIDER, "denoising_strength", "Denoising Strength", settings.get("denoising_strength"), (0.0, 1.0, 0.1)),
+            (gimpfu.PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(settings.get("sampler_name")), SAMPLERS),
+            ]
+
+    PLUGIN_FIELDS_CONTROLNET_OPTIONS = [
+            (gimpfu.PF_TOGGLE, "cn_enabled", "Enable ControlNet", False),
+            (gimpfu.PF_LAYER, "cn_layer", "ControlNet Layer", None),
+            (gimpfu.PF_TOGGLE, "cn_skip_annotator_layers", "Skip annotator layers", True),
+            ]
+
+    PLUGIN_FIELDS_CONFIG = [
+        (gimpfu.PF_STRING, "prompt", "Prompt Suffix", settings.get("prompt")),
+        (gimpfu.PF_STRING, "negative_prompt", "Negative Prompt Suffix", settings.get("negative_prompt")),
+        (gimpfu.PF_STRING, "api_base", "Backend API URL base", settings.get("api_base")),
         ]
 
-PLUGIN_FIELDS_LAYERS = [
-        (PF_IMAGE, "image", "Image", None),
-        (PF_LAYER, "layer", "Layer", None),
-        ]
-
-PLUGIN_FIELDS_COMMON = [
-        (PF_TEXT, "prompt", "Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
-        (PF_TEXT, "negative_prompt", "Negative Prompt", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
-        (PF_INT32, "seed", "Seed", STABLE_GIMPFUSION_DEFAULT_SETTINGS["seed"]),
-        (PF_SLIDER, "batch_size", "Batch count", STABLE_GIMPFUSION_DEFAULT_SETTINGS["batch_size"], (1, 20, 1.0)),
-        (PF_SLIDER, "steps", "Steps", STABLE_GIMPFUSION_DEFAULT_SETTINGS["steps"], (10, 150, 1.0)),
-        (PF_SLIDER, "mask_blur", "Mask Blur", STABLE_GIMPFUSION_DEFAULT_SETTINGS["mask_blur"], (1, 10, 1.0)),
-        (PF_SLIDER, "cfg_scale", "CFG Scale", STABLE_GIMPFUSION_DEFAULT_SETTINGS["cfg_scale"], (0, 20, 0.5)),
-        (PF_SLIDER, "denoising_strength", "Denoising Strength", STABLE_GIMPFUSION_DEFAULT_SETTINGS["denoising_strength"], (0.0, 1.0, 0.1)),
-        (PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(STABLE_GIMPFUSION_DEFAULT_SETTINGS["sampler_name"]), SAMPLERS),
-        ]
-
-PLUGIN_FIELDS_CONTROLNET_OPTIONS = [
-        (PF_TOGGLE, "cn_enabled", "Enable ControlNet", False),
-        (PF_LAYER, "cn_layer", "ControlNet Layer", None),
-        (PF_TOGGLE, "cn_skip_annotator_layers", "Skip annotator layers", True),
-        ]
-
-PLUGIN_FIELDS_CONFIG = [
-    (PF_STRING, "prompt", "Prompt Suffix", STABLE_GIMPFUSION_DEFAULT_SETTINGS["prompt"]),
-    (PF_STRING, "negative_prompt", "Negative Prompt Suffix", STABLE_GIMPFUSION_DEFAULT_SETTINGS["negative_prompt"]),
-    (PF_STRING, "api_base", "Backend API URL base", STABLE_GIMPFUSION_DEFAULT_SETTINGS["api_base"]),
-    ]
-
-if sd_model_checkpoint is not None:
-    PLUGIN_FIELDS_CHECKPOINT = [
-        (PF_OPTION, "model", "Model", models.index(sd_model_checkpoint), models)
-        ]
-else:
-    PLUGIN_FIELDS_CHECKPOINT = []
+    logging.info(models)
+    if sd_model_checkpoint is not None:
+        PLUGIN_FIELDS_CHECKPOINT = [
+            (gimpfu.PF_OPTION, "model", "Model", models.index(sd_model_checkpoint), models)
+            ]
+    else:
+        PLUGIN_FIELDS_CHECKPOINT = []
 
 
-PLUGIN_FIELDS_RESIZE_MODE = [(PF_OPTION, "resize_mode", "Resize Mode", 0, tuple(RESIZE_MODES.keys()))]
-PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET_OPTIONS
-PLUGIN_FIELDS_IMG2IMG = [] + PLUGIN_FIELDS_RESIZE_MODE + PLUGIN_FIELDS_TXT2IMG
+    PLUGIN_FIELDS_RESIZE_MODE = [(gimpfu.PF_OPTION, "resize_mode", "Resize Mode", 0, tuple(RESIZE_MODES.keys()))]
+    PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET_OPTIONS
+    PLUGIN_FIELDS_IMG2IMG = [] + PLUGIN_FIELDS_RESIZE_MODE + PLUGIN_FIELDS_TXT2IMG
 
-PLUGIN_FIELDS_CONTROLNET = [] + [
-        (PF_OPTION, "module", "Module", 0, CONTROLNET_MODULES),
-        (PF_OPTION, "model", "Model", 0, sd_data.get("cn_models", ["none"])),
-        (PF_SLIDER, "weight",  "Weight", 1, (0, 2, 0.05)),
-        (PF_OPTION, "resize_mode", "Resize Mode", 1, CONTROLNET_RESIZE_MODES),
-        (PF_BOOL, "lowvram", "Low VRAM", False),
-        (PF_BOOL, "guessmode", "Guess Mode", False),
-        (PF_SLIDER, "guidance_start",  "Guidance Start (T)", 0, (0, 1, 0.01)),
-        (PF_SLIDER, "guidance_end",  "Guidance End (T)", 1, (0, 1, 0.01)),
-        (PF_SLIDER, "guidance",  "Guidance", 1, (0, 1, 0.01)),
-        (PF_SLIDER, "processor_res",  "Processor Resolution", 512, (64, 2048, 1)),
-        (PF_SLIDER, "threshold_a",  "Threshold A", 64, (100, 2048, 1)),
-        (PF_SLIDER, "threshold_b",  "Threshold B", 64, (200, 2048, 1)),
-        ]
+    PLUGIN_FIELDS_CONTROLNET = [] + [
+            (gimpfu.PF_OPTION, "module", "Module", 0, CONTROLNET_MODULES),
+            (gimpfu.PF_OPTION, "model", "Model", 0, settings.get("cn_models", ["none"])),
+            (gimpfu.PF_SLIDER, "weight",  "Weight", 1, (0, 2, 0.05)),
+            (gimpfu.PF_OPTION, "resize_mode", "Resize Mode", 1, CONTROLNET_RESIZE_MODES),
+            (gimpfu.PF_BOOL, "lowvram", "Low VRAM", False),
+            (gimpfu.PF_BOOL, "guessmode", "Guess Mode", False),
+            (gimpfu.PF_SLIDER, "guidance_start",  "Guidance Start (T)", 0, (0, 1, 0.01)),
+            (gimpfu.PF_SLIDER, "guidance_end",  "Guidance End (T)", 1, (0, 1, 0.01)),
+            (gimpfu.PF_SLIDER, "guidance",  "Guidance", 1, (0, 1, 0.01)),
+            (gimpfu.PF_SLIDER, "processor_res",  "Processor Resolution", 512, (64, 2048, 1)),
+            (gimpfu.PF_SLIDER, "threshold_a",  "Threshold A", 64, (100, 2048, 1)),
+            (gimpfu.PF_SLIDER, "threshold_b",  "Threshold B", 64, (200, 2048, 1)),
+            ]
 
-register(
-        "stable-gimpfusion-config",
-        "This is where you configure params that are shared between all API requests",
-        "Gimp Client for the StableDiffusion Automatic1111 API",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Global",
-        "*",      # Alternately use RGB, RGB*, GRAY*, INDEXED etc.
-        [] + PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CONFIG,
-        [],
-        handleConfig, menu="<Image>/GimpFusion/Config",
-        )
+    gimpfu.register(
+            "stable-gimpfusion-config",
+            "This is where you configure params that are shared between all API requests",
+            "Gimp Client for the StableDiffusion Automatic1111 API",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Global",
+            "*",      # Alternately use RGB, RGB*, GRAY*, INDEXED etc.
+            [] + PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CONFIG,
+            [],
+            handleConfig, menu="<Image>/GimpFusion/Config",
+            )
 
-register(
-        "stable-gimpfusion-config-model",
-        "Change the Checkpoint Model",
-        "Change the Checkpoint Model",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Change Model",
-        "*",
-        [] + PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CHECKPOINT,
-        [],
-        handleChangeModel, menu="<Image>/GimpFusion/Config"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-config-model",
+            "Change the Checkpoint Model",
+            "Change the Checkpoint Model",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Change Model",
+            "*",
+            [] + PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CHECKPOINT,
+            [],
+            handleChangeModel, menu="<Image>/GimpFusion/Config"
+            )
 
-register(
-        "stable-gimpfusion-txt2img",
-        "Text to image",
-        "Text to image",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Text to image",
-        "*",
-        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_TXT2IMG,
-        [],
-        handleTextToImage, menu="<Image>/GimpFusion"
-        )
-
-
-register(
-        "stable-gimpfusion-txt2img-context",
-        "Text to image",
-        "Text to image",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Text to image",
-        "*",
-        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_TXT2IMG,
-        [],
-        handleTextToImageFromLayersContext, menu="<Layers>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-txt2img",
+            "Text to image",
+            "Text to image",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Text to image",
+            "*",
+            []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_TXT2IMG,
+            [],
+            handleTextToImage, menu="<Image>/GimpFusion"
+            )
 
 
-register(
-        "stable-gimpfusion-img2img",
-        "Image to image",
-        "Image to image",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Image to image",
-        "*",
-        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
-        [],
-        handleImageToImage, menu="<Image>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-txt2img-context",
+            "Text to image",
+            "Text to image",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Text to image",
+            "*",
+            [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_TXT2IMG,
+            [],
+            handleTextToImageFromLayersContext, menu="<Layers>/GimpFusion"
+            )
 
-register(
-        "stable-gimpfusion-img2img-context",
-        "Image to image",
-        "Image to image",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Image to image",
-        "*",
-        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
-        [],
-        handleImageToImageFromLayersContext, menu="<Layers>/GimpFusion"
-        )
 
-register(
-        "stable-gimpfusion-inpainting",
-        "Inpainting",
-        "Inpainting",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Inpainting",
-        "*",
-        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
-        [],
-        handleInpainting, menu="<Image>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-img2img",
+            "Image to image",
+            "Image to image",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Image to image",
+            "*",
+            []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
+            [],
+            handleImageToImage, menu="<Image>/GimpFusion"
+            )
 
-register(
-        "stable-gimpfusion-inpainting-context",
-        "Inpainting",
-        "Inpainting",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Inpainting",
-        "*",
-        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
-        [],
-        handleInpaintingFromLayersContext, menu="<Layers>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-img2img-context",
+            "Image to image",
+            "Image to image",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Image to image",
+            "*",
+            [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
+            [],
+            handleImageToImageFromLayersContext, menu="<Layers>/GimpFusion"
+            )
 
-register(
-        "stable-gimpfusion-config-controlnet-layer",
-        "Convert current layer to ControlNet layer or edit ControlNet Layer's options",
-        "ControlNet Layer",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Active layer as ControlNet",
-        "*",
-        []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CONTROLNET,
-        [],
-        handleControlNetLayerConfig, menu="<Image>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-inpainting",
+            "Inpainting",
+            "Inpainting",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Inpainting",
+            "*",
+            []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
+            [],
+            handleInpainting, menu="<Image>/GimpFusion"
+            )
 
-register(
-        "stable-gimpfusion-config-controlnet-layer-context",
-        "Convert current layer to ControlNet layer or edit ControlNet Layer's options",
-        "ControlNet Layer",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Use as ControlNet",
-        "*",
-        [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_CONTROLNET,
-        [],
-        handleControlNetLayerConfigFromLayersContext, menu="<Layers>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-inpainting-context",
+            "Inpainting",
+            "Inpainting",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Inpainting",
+            "*",
+            [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_IMG2IMG,
+            [],
+            handleInpaintingFromLayersContext, menu="<Layers>/GimpFusion"
+            )
 
-register(
-        "stable-gimpfusion-layer-info",
-        "Show stable gimpfusion info associated with this layer",
-        "Layer Info",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Layer Info",
-        "*",
-        [] + PLUGIN_FIELDS_IMAGE,
-        [],
-        handleShowLayerInfo, menu="<Image>/GimpFusion/Config"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-config-controlnet-layer",
+            "Convert current layer to ControlNet layer or edit ControlNet Layer's options",
+            "ControlNet Layer",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Active layer as ControlNet",
+            "*",
+            []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_CONTROLNET,
+            [],
+            handleControlNetLayerConfig, menu="<Image>/GimpFusion"
+            )
 
-register(
-        "stable-gimpfusion-layer-info-context",
-        "Show stable gimpfusion info associated with this layer",
-        "Layer Info",
-        "ArtBIT",
-        "ArtBIT",
-        "2023",
-        "Layer Info",
-        "*",
-        [] + PLUGIN_FIELDS_LAYERS,
-        [],
-        handleShowLayerInfoContext, menu="<Layers>/GimpFusion"
-        )
+    gimpfu.register(
+            "stable-gimpfusion-config-controlnet-layer-context",
+            "Convert current layer to ControlNet layer or edit ControlNet Layer's options",
+            "ControlNet Layer",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Use as ControlNet",
+            "*",
+            [] + PLUGIN_FIELDS_LAYERS + PLUGIN_FIELDS_CONTROLNET,
+            [],
+            handleControlNetLayerConfigFromLayersContext, menu="<Layers>/GimpFusion"
+            )
 
-main()
+    gimpfu.register(
+            "stable-gimpfusion-layer-info",
+            "Show stable gimpfusion info associated with this layer",
+            "Layer Info",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Layer Info",
+            "*",
+            [] + PLUGIN_FIELDS_IMAGE,
+            [],
+            handleShowLayerInfo, menu="<Image>/GimpFusion/Config"
+            )
+
+    gimpfu.register(
+            "stable-gimpfusion-layer-info-context",
+            "Show stable gimpfusion info associated with this layer",
+            "Layer Info",
+            "ArtBIT",
+            "ArtBIT",
+            "2023",
+            "Layer Info",
+            "*",
+            [] + PLUGIN_FIELDS_LAYERS,
+            [],
+            handleShowLayerInfoContext, menu="<Layers>/GimpFusion"
+            )
+
+init_plugin()
+gimpfu.main()
+
