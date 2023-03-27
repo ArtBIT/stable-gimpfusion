@@ -29,6 +29,8 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
 # Troubleshooting
 
 - Make sure you're running the Automatic1111's Web UI in API mode (`--api`) [Automatic1111's StableDiffusion Web-UI API](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API) try accessing [http://127.0.0.1:7860/docs](http://127.0.0.1:7860/docs) and verify the `/sdapi/` routes are present to make sure it's running
+- Ensure your Gimp installation has python support (You should see `Filters>Python-fu>Console` in the menu)
+- Verify the plugin folder that you are using (~/.config/GIMP/2.20/plug-ins) listed in the GIMP's plug-ins folders. (`Edit>Preferences>Folders>Plug-Ins`)
 
 # License
 
