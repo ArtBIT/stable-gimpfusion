@@ -388,7 +388,7 @@ class StableGimpfusionPlugin():
 
             # selection to file
             #disable=pdb.gimp_image_undo_disable(layer.image)
-            tmp_layer = Layer.create(layer.image, "mask", layer.image.width, layer.image.height, RGBA_IMAGE, 100, NORMAL_MODE)
+            tmp_layer = Layer.create(layer.image, "mask", layer.image.width, layer.image.height, gimpenums.RGBA_IMAGE, 100, gimpenums.NORMAL_MODE)
             tmp_layer.addSelectionAsMask().insert()
 
             if rect is not None:
@@ -750,7 +750,7 @@ class Layer():
         return self
 
     def addSelectionAsMask(self):
-        mask = self.layer.create_mask(ADD_SELECTION_MASK)
+        mask = self.layer.create_mask(gimpenums.ADD_SELECTION_MASK)
         self.layer.add_mask(mask)
         return self
 
