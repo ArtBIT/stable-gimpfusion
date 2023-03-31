@@ -1,8 +1,12 @@
 {
-  "version": 9,
-  "message": "Fixes an issue with the Mac OSX version of GIMP. Added persistent json storage.",
+  "version": 10,
+  "message": "Added support for the second ControlNet.",
 
   "history": [
+    {
+      "version": 9,
+      "message": "Fixes an issue with the Mac OSX version of GIMP. Added persistent json storage."
+    },
     {
       "version": 8,
       "message": "There is newer version of the StableGimpfusion plugin available! It introduces basic ControlNet support."

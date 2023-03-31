@@ -2,7 +2,7 @@
 # vim: set noai ts=4 sw=4 expandtab
 
 # Stable Gimpfusion 
-# v1.0.8
+# v1.0.10
 # Thin API client for Automatic1111's StableDiffusion API
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
@@ -19,7 +19,7 @@ import gimp
 import gimpenums
 import gimpfu
 
-VERSION = 9
+VERSION = 10
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
@@ -439,7 +439,7 @@ class StableGimpfusionPlugin():
 
     def imageToImage(self, *args):
         global settings
-        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
         image = self.image
 
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
@@ -466,12 +466,13 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
 
-            if cn_enabled:
-                data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
-                response = self.api.post("/controlnet/img2img", data)
-                # last image is the controlnet mask, ignore it
-                #if len(response["images"]) > 1:
-                #    response["images"] = response["images"][:-1]
+            controlnet_units = []
+            if cn1_enabled:
+                controlnet_units.append(self.getControlNetParams(cn1_layer))
+            if cn2_enabled:
+                controlnet_units.append(self.getControlNetParams(cn2_layer))
+            if len(controlnet_units) > 0:
+                data.update({"controlnet_units": controlnet_units})
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
@@ -485,7 +486,7 @@ class StableGimpfusionPlugin():
 
     def inpainting(self, *args):
         global settings
-        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
         image = self.image
 
         rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
@@ -523,12 +524,13 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
 
-            if cn_enabled:
-                data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
-                response = self.api.post("/controlnet/img2img", data)
-                # last image is the controlnet mask, ignore it
-                #if len(response["images"]) > 1:
-                #    response["images"] = response["images"][:-1]
+            controlnet_units = []
+            if cn1_enabled:
+                controlnet_units.append(self.getControlNetParams(cn1_layer))
+            if cn2_enabled:
+                controlnet_units.append(self.getControlNetParams(cn2_layer))
+            if len(controlnet_units) > 0:
+                data.update({"controlnet_units": controlnet_units})
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
@@ -542,7 +544,7 @@ class StableGimpfusionPlugin():
 
     def textToImage(self, *args):
         global settings
-        prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn_enabled, cn_layer, cn_skip_annotator_layers = args
+        prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
         image = self.image
 
         x, y, width, height = self.getSelectionBounds()
@@ -567,12 +569,14 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text(random.choice(GENERATION_MESSAGES))
 
-            if cn_enabled:
-                data.update({"controlnet_units": [self.getControlNetParams(cn_layer)]})
+            controlnet_units = []
+            if cn1_enabled:
+                controlnet_units.append(self.getControlNetParams(cn1_layer))
+            if cn2_enabled:
+                controlnet_units.append(self.getControlNetParams(cn2_layer))
+            if len(controlnet_units) > 0:
+                data.update({"controlnet_units": controlnet_units})
                 response = self.api.post("/controlnet/txt2img", data)
-                # last image is the controlnet mask, ignore it
-                #if len(response["images"]) > 1:
-                #    response["images"] = response["images"][:-1]
             else:
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
@@ -915,8 +919,10 @@ def init_plugin():
             ]
 
     PLUGIN_FIELDS_CONTROLNET_OPTIONS = [
-            (gimpfu.PF_TOGGLE, "cn_enabled", "Enable ControlNet", False),
-            (gimpfu.PF_LAYER, "cn_layer", "ControlNet Layer", None),
+            (gimpfu.PF_TOGGLE, "cn1_enabled", "Enable ControlNet 1", False),
+            (gimpfu.PF_LAYER, "cn1_layer", "ControlNet 1 Layer", None),
+            (gimpfu.PF_TOGGLE, "cn2_enabled", "Enable ControlNet 2", False),
+            (gimpfu.PF_LAYER, "cn2_layer", "ControlNet 2 Layer", None),
             (gimpfu.PF_TOGGLE, "cn_skip_annotator_layers", "Skip annotator layers", True),
             ]
 
