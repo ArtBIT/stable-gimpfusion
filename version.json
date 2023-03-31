@@ -1,8 +1,12 @@
 {
-  "version": 11,
-  "message": "Added support for width/height.",
+  "version": 12,
+  "message": "Added inpainting options.",
 
   "history": [
+    {
+      "version": 11,
+      "message": "Added support for width/height."
+    },
     {
       "version": 10,
       "message": "Added support for the second ControlNet."

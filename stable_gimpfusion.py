@@ -2,7 +2,7 @@
 # vim: set noai ts=4 sw=4 expandtab
 
 # Stable Gimpfusion 
-# v1.0.10
+# v1.0.12
 # Thin API client for Automatic1111's StableDiffusion API
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
@@ -19,7 +19,7 @@ import gimp
 import gimpenums
 import gimpfu
 
-VERSION = 11
+VERSION = 12
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
@@ -414,7 +414,7 @@ class StableGimpfusionPlugin():
 
     def inpainting(self, *args):
         global settings
-        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, width, height, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, width, height, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers, invert_mask, inpaint_full_res = args
         image = self.image
 
         x, y, origWidth, origHeight = self.getSelectionBounds()
@@ -427,9 +427,9 @@ class StableGimpfusionPlugin():
 
         data = {
             "mask": mask,
-            "inpaint_full_res": True,
+            "inpaint_full_res": inpaint_full_res,
             "inpaint_full_res_padding": 10,
-            "inpainting_mask_invert": 0,
+            "inpainting_mask_invert": 1 if invert_mask else 0,
 
             "resize_mode": resize_mode,
             "init_images": init_images,
@@ -462,7 +462,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers})
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(self.image.width, self.image.height)
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.inpainting")
@@ -767,6 +767,8 @@ class ResponseLayers():
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(self.image)
         if not non_empty:
             return
+        if (x1 == 0) and (y1 == 0) and (x2 - x1 == self.image.width) and (y2 - y1 == self.image.height):
+            return
         for layer in self.layers:
             Layer(layer).addSelectionAsMask()
         return self
@@ -871,6 +873,11 @@ def init_plugin():
     PLUGIN_FIELDS_RESIZE_MODE = [(gimpfu.PF_OPTION, "resize_mode", "Resize Mode", 0, tuple(RESIZE_MODES.keys()))]
     PLUGIN_FIELDS_TXT2IMG = [] + PLUGIN_FIELDS_COMMON + PLUGIN_FIELDS_CONTROLNET_OPTIONS
     PLUGIN_FIELDS_IMG2IMG = [] + PLUGIN_FIELDS_RESIZE_MODE + PLUGIN_FIELDS_TXT2IMG
+    PLUGIN_FIELDS_INPAINTING = [
+        (gimpfu.PF_TOGGLE, "invert_mask", "Invert Mask", False),
+        (gimpfu.PF_TOGGLE, "inpaint_full_res", "Inpaint Whole Picture", True),
+        ]
+
 
     PLUGIN_FIELDS_CONTROLNET = [] + [
             (gimpfu.PF_OPTION, "module", "Module", 0, CONTROLNET_MODULES),
@@ -982,7 +989,7 @@ def init_plugin():
             "2023",
             "Inpainting",
             "*",
-            []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG,
+            []+ PLUGIN_FIELDS_IMAGE + PLUGIN_FIELDS_IMG2IMG + PLUGIN_FIELDS_INPAINTING,
             [],
             handleInpainting, menu="<Image>/GimpFusion"
             )
