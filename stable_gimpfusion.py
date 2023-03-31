@@ -207,74 +207,6 @@ class ApiClient():
             logging.exception("ERROR: ApiClient.get")
 
 
-class Rect():
-    def __init__(self, width, height=None):
-        global DEBUG
-        if isinstance(width, Rect):
-            self.width = width.width
-            self.height = width.height
-            self.orig_scale = width.orig_scale
-        elif isinstance(width, list):
-            self.width = width[0]
-            self.height = width[1]
-            self.orig_scale = float((len(width) == 3 and width[2]) or 1.0)
-        elif isinstance(width, tuple):
-            self.width = width[0]
-            self.height = width[1]
-            self.orig_scale = float((len(width) == 3 and width[2]) or 1.0)
-        else:
-            if type(width) == int or type(width) == float:
-                self.width = width
-            else:
-                if DEBUG:
-                    raise Exception("Width must be of type int or float")
-            if type(height) == int or type(height) == float:
-                self.height = height
-            else:
-                if DEBUG:
-                    raise Exception("Height must be of type int or float")
-            self.orig_scale = 1.0
-        self.aspect = float(self.width) / self.height
-
-    def scaleTo(self, new_scale):
-        new_width = roundToMultiple(float(self.width) * new_scale, 64)
-        new_height = roundToMultiple(float(self.height) * new_scale, 64)
-        new_scale = new_width / self.width
-        self.width = new_width
-        self.height = new_height
-        self.orig_scale = self.orig_scale * new_scale
-        return self
-
-    def fitIntoRect(self, target_rect, force = False):
-        if (self.width < target_rect.width) and (self.height < target_rect.height) and not force:
-            # nothing to do, rect already fits inside target
-            return
-        if self.aspect > target_rect.aspect:
-            scale = float(target_rect.width) / self.width
-        else:
-            scale = float(target_rect.height) / self.height
-        return self.scaleTo(scale)
-
-    def coverRect(self, target_rect, force = False):
-        if (self.width > target_rect.width) and (self.height > target_rect.height) and not force:
-            # nothing to do, rect already covers target
-            return
-        if self.aspect > target_rect.aspect:
-            scale = float(target_rect.height) / self.height
-        else:
-            scale = float(target_rect.width) / self.width
-        return self.scaleTo(scale)
-
-    def fitBetween(self, min_rect, max_rect):
-        self.coverRect(Rect(min_rect))
-        self.fitIntoRect(Rect(max_rect))
-        self.scaleTo(1.0)
-        return self
-
-    def __str__ (self):
-        return 'Rect('+", ".join(map(str,[self.width, self.height, self.aspect]))+')'
-
-
 """ Get the StableDiffusion data needed for dynamic gimpfu.PF_OPTION lists """
 def fetch_stablediffusion_options():
     global api, settings
@@ -367,22 +299,20 @@ class StableGimpfusionPlugin():
             except Exception as ex:
                 ex = ex
 
-    def getLayerAsBase64(self, layer, rect = None):
+    def getLayerAsBase64(self, layer):
         # store active_layer
         active_layer = layer.image.active_layer
         copy = Layer(layer).copy().insert()
-        if rect is not None:
-            copy.resize(rect.width, rect.height)
         result = copy.toBase64();
         copy.remove()
         # restore active_layer
         gimp.pdb.gimp_image_set_active_layer(active_layer.image, active_layer)
         return result
 
-    def getActiveLayerAsBase64(self, rect = None):
-        return self.getLayerAsBase64(self.image.active_layer, rect)
+    def getActiveLayerAsBase64(self):
+        return self.getLayerAsBase64(self.image.active_layer)
 
-    def getLayerMaskAsBase64(self, layer, rect = None):
+    def getLayerMaskAsBase64(self, layer):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(layer.image)
         if non_empty:
             # selection to base64
@@ -395,9 +325,6 @@ class StableGimpfusionPlugin():
             tmp_layer = Layer.create(layer.image, "mask", layer.image.width, layer.image.height, gimpenums.RGBA_IMAGE, 100, gimpenums.NORMAL_MODE)
             tmp_layer.addSelectionAsMask().insert()
 
-            if rect is not None:
-                tmp_layer.resize(rect.width, rect.height)
-
             result = tmp_layer.maskToBase64()
             tmp_layer.remove()
             #enable = pdb.gimp_image_undo_enable(layer.image)
@@ -409,14 +336,12 @@ class StableGimpfusionPlugin():
         elif layer.mask:
             # mask to file
             tmp_layer = Layer(layer)
-            if rect is not None:
-                tmp_layer.resize(rect.width, rect.height)
             return tmp_layer.maskToBase64()
         else:
             return ""
 
-    def getActiveMaskAsBase64(self, rect = None):
-        return self.getLayerMaskAsBase64(self.image.active_layer, rect)
+    def getActiveMaskAsBase64(self):
+        return self.getLayerMaskAsBase64(self.image.active_layer)
 
     def getSelectionBounds(self):
         non_empty, x1, y1, x2, y2 = gimp.pdb.gimp_selection_bounds(self.image)
@@ -457,8 +382,8 @@ class StableGimpfusionPlugin():
             "denoising_strength": float(denoising_strength),
             "steps": int(steps),
             "cfg_scale": float(cfg_scale),
-            "width": int(width),
-            "height": int(height),
+            "width": roundToMultiple(width, 8),
+            "height": roundToMultiple(height, 8),
             "sampler_index": SAMPLERS[sampler_index],
             "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
             "seed": seed or -1
@@ -475,6 +400,7 @@ class StableGimpfusionPlugin():
                 controlnet_units.append(self.getControlNetParams(cn2_layer))
             if len(controlnet_units) > 0:
                 data.update({"controlnet_units": controlnet_units})
+                response = self.api.post("/controlnet/img2img", data)
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
@@ -513,8 +439,8 @@ class StableGimpfusionPlugin():
             "denoising_strength": float(denoising_strength),
             "steps": int(steps),
             "cfg_scale": float(cfg_scale),
-            "width": width,
-            "height": height,
+            "width": roundToMultiple(width, 8),
+            "height": roundToMultiple(height, 8),
             "sampler_index": SAMPLERS[sampler_index],
             "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
             "seed": seed or -1
@@ -529,8 +455,10 @@ class StableGimpfusionPlugin():
                 controlnet_units.append(self.getControlNetParams(cn1_layer))
             if cn2_enabled:
                 controlnet_units.append(self.getControlNetParams(cn2_layer))
+
             if len(controlnet_units) > 0:
                 data.update({"controlnet_units": controlnet_units})
+                response = self.api.post("/controlnet/img2img", data)
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
@@ -555,8 +483,8 @@ class StableGimpfusionPlugin():
             "cfg_scale": float(cfg_scale),
             "denoising_strength": float(denoising_strength),
             "steps": int(steps),
-            "width": int(width),
-            "height": int(height),
+            "width": roundToMultiple(width, 8),
+            "height": roundToMultiple(height, 8),
             "sampler_index": SAMPLERS[sampler_index],
             "batch_size": min(MAX_BATCH_SIZE, max(1, batch_size)),
             "seed": seed or -1
@@ -571,6 +499,7 @@ class StableGimpfusionPlugin():
                 controlnet_units.append(self.getControlNetParams(cn1_layer))
             if cn2_enabled:
                 controlnet_units.append(self.getControlNetParams(cn2_layer))
+
             if len(controlnet_units) > 0:
                 data.update({"controlnet_units": controlnet_units})
                 response = self.api.post("/controlnet/txt2img", data)
