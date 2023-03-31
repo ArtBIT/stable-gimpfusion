@@ -281,6 +281,9 @@ class StableGimpfusionPlugin():
         except Exception as e:
             logging.exception("ERROR: StableGimpfusionPlugin.__init__")
 
+    def showMessage(self, text):
+        gimp.pdb.gimp_message(text)
+
     def checkUpdate(self):
         try:
             gimp.get_data("update_checked")
@@ -409,6 +412,7 @@ class StableGimpfusionPlugin():
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.imageToImage")
+            self.showMessage(repr(ex))
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
@@ -467,6 +471,7 @@ class StableGimpfusionPlugin():
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.inpainting")
+            self.showMessage(repr(ex))
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
@@ -511,6 +516,7 @@ class StableGimpfusionPlugin():
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.textToImage")
+            self.showMessage(repr(ex))
         finally:
             gimp.pdb.gimp_progress_end()
             self.cleanup()
