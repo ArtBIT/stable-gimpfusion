@@ -24,7 +24,7 @@ PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
 
- Initialize debugging
+# Initialize debugging
 if os.environ.get('DEBUG'):
     DEBUG = True
     logging.basicConfig(level=logging.DEBUG)
