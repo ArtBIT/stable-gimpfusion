@@ -36,6 +36,7 @@ logging.info("StableGimfusion version %d" % VERSION)
 
 
 # GLOBALS
+layer_counter = 1
 settings = None
 api = None
 models = None
@@ -540,10 +541,9 @@ class StableGimpfusionPlugin():
             "threshold_b": threshold_b,
         }
         active_layer = self.image.active_layer
-        cnlayer = LayerData(active_layer, CONTROLNET_DEFAULT_SETTINGS)
-        if not cnlayer.had_parasite:
-            gimp.pdb.gimp_layer_set_name(active_layer, "ControlNet Layer")
-        cnlayer.save(cn_settings)
+        cnlayer = Layer(active_layer)
+        cnlayer.saveData(cn_settings)
+        cnlayer.rename("ControlNet"+str(cnlayer.id))
 
     def config(self, prompt, negative_prompt, url):
         global settings
@@ -612,12 +612,11 @@ class LayerData():
         parasite = gimp.Parasite(self.name, gimpenums.PARASITE_PERSISTENT, deunicodeDict(json.dumps(data)))
         self.layer.parasite_attach(parasite)
 
-layer_id = 1
 class Layer():
     def __init__(self, layer = None):
-        global layer_id
-        self.id = layer_id 
-        layer_id += 1
+        global layer_counter
+        self.id = layer_counter 
+        layer_counter = layer_counter + 1
         if layer is not None:
             self.layer = layer
             self.image = layer.image
@@ -842,7 +841,7 @@ def init_plugin():
             (gimpfu.PF_SLIDER, "width", "Width", settings.get("width"), (64, 2048, 8)),
             (gimpfu.PF_SLIDER, "height", "Height", settings.get("height"), (64, 2048, 8)),
             (gimpfu.PF_SLIDER, "cfg_scale", "CFG Scale", settings.get("cfg_scale"), (0, 20, 0.5)),
-            (gimpfu.PF_SLIDER, "denoising_strength", "Denoising Strength", settings.get("denoising_strength"), (0.0, 1.0, 0.1)),
+            (gimpfu.PF_SLIDER, "denoising_strength", "Denoising Strength", settings.get("denoising_strength"), (0.0, 1.0, 0.01)),
             (gimpfu.PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(settings.get("sampler_name")), SAMPLERS),
             ]
 
