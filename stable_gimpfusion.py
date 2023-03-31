@@ -816,8 +816,7 @@ def init_plugin():
 
     settings = MyShelf(STABLE_GIMPFUSION_DEFAULT_SETTINGS)
     api = ApiClient(settings.get("api_base"))
-    if settings.get("sd_model_checkpoint", None) is None:
-        fetch_stablediffusion_options()
+    fetch_stablediffusion_options()
     models = settings.get("models", [])
     sd_model_checkpoint = settings.get("sd_model_checkpoint")
     is_server_running = settings.get("is_server_running")
