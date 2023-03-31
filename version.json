@@ -1,8 +1,12 @@
 {
-  "version": 10,
-  "message": "Added support for the second ControlNet.",
+  "version": 11,
+  "message": "Added support for width/height.",
 
   "history": [
+    {
+      "version": 10,
+      "message": "Added support for the second ControlNet."
+    },
     {
       "version": 9,
       "message": "Fixes an issue with the Mac OSX version of GIMP. Added persistent json storage."

@@ -19,18 +19,20 @@ import gimp
 import gimpenums
 import gimpfu
 
-VERSION = 10
+VERSION = 11
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
 
-# Initialize debugging
+ Initialize debugging
 if os.environ.get('DEBUG'):
     DEBUG = True
     logging.basicConfig(level=logging.DEBUG)
 else:
     DEBUG = False
     logging.basicConfig(level=logging.INFO)
+
+logging.info("StableGimfusion version %d" % VERSION)
 
 
 # GLOBALS
@@ -46,6 +48,8 @@ STABLE_GIMPFUSION_DEFAULT_SETTINGS = {
         "denoising_strength": 0.8,
         "cfg_scale": 7.5,
         "steps": 50,
+        "width": 512,
+        "height": 512,
         "prompt": "",
         "negative_prompt": "",
         "batch_size": 1,
@@ -439,16 +443,14 @@ class StableGimpfusionPlugin():
 
     def imageToImage(self, *args):
         global settings
-        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, width, height, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
         image = self.image
 
-        rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
-        width = rect.width
-        height = rect.height
+        x, y, origWidth, origHeight = self.getSelectionBounds()
 
         data = {
             "resize_mode": resize_mode,
-            "init_images": [self.getActiveLayerAsBase64(rect)],
+            "init_images": [self.getActiveLayerAsBase64()],
 
             "prompt": (prompt + " " + settings.get("prompt")).strip(),
             "negative_prompt": (negative_prompt + " " +  settings.get("negative_prompt")).strip(),
@@ -476,7 +478,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(image.width, image.height)
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(origWidth, origHeight)
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.imageToImage")
@@ -486,15 +488,13 @@ class StableGimpfusionPlugin():
 
     def inpainting(self, *args):
         global settings
-        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
+        resize_mode, prompt, negative_prompt, seed, batch_size, steps, mask_blur, width, height, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
         image = self.image
 
-        rect = Rect((image.width, image.height)).fitBetween((384, 384), (1024, 1024))
-        width = rect.width
-        height = rect.height
+        x, y, origWidth, origHeight = self.getSelectionBounds()
 
-        init_images = [self.getActiveLayerAsBase64(rect)]
-        mask = self.getActiveMaskAsBase64(rect)
+        init_images = [self.getActiveLayerAsBase64()]
+        mask = self.getActiveMaskAsBase64()
         if mask == "":
             logging.exception("ERROR: StableGimpfusionPlugin.inpainting")
             raise Exception("Inpainting must use either a selection or layer mask")
@@ -534,7 +534,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/img2img", data)
 
-            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(image.width, image.height)
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers})
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.inpainting")
@@ -544,13 +544,10 @@ class StableGimpfusionPlugin():
 
     def textToImage(self, *args):
         global settings
-        prompt, negative_prompt, seed, batch_size, steps, mask_blur, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
+        prompt, negative_prompt, seed, batch_size, steps, mask_blur, width, height, cfg_scale, denoising_strength, sampler_index, cn1_enabled, cn1_layer, cn2_enabled, cn2_layer, cn_skip_annotator_layers = args
         image = self.image
 
-        x, y, width, height = self.getSelectionBounds()
-        rect = Rect(width, height).fitBetween((384, 384), (1024, 1024))
-        width = rect.width
-        height = rect.height
+        x, y, origWidth, origHeight = self.getSelectionBounds()
 
         data = {
             "prompt": (prompt + " " + settings.get("prompt")).strip(),
@@ -580,7 +577,7 @@ class StableGimpfusionPlugin():
             else:
                 response = self.api.post("/sdapi/v1/txt2img", data)
 
-            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).scale(1.0/rect.orig_scale).translate((x, y)).addSelectionAsMask()
+            ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(origWidth, origHeight).translate((x, y)).addSelectionAsMask()
 
         except Exception as ex:
             logging.exception("ERROR: StableGimpfusionPlugin.textToImage")
@@ -895,7 +892,6 @@ def init_plugin():
     is_server_running = settings.get("is_server_running")
     logging.info(settings)
 
-
     PLUGIN_FIELDS_IMAGE = [
             (gimpfu.PF_IMAGE, "image", "Image", None),
             (gimpfu.PF_DRAWABLE, "drawable", "Drawable", None),
@@ -913,6 +909,8 @@ def init_plugin():
             (gimpfu.PF_SLIDER, "batch_size", "Batch count", settings.get("batch_size"), (1, 20, 1.0)),
             (gimpfu.PF_SLIDER, "steps", "Steps", settings.get("steps"), (10, 150, 1.0)),
             (gimpfu.PF_SLIDER, "mask_blur", "Mask Blur", settings.get("mask_blur"), (1, 10, 1.0)),
+            (gimpfu.PF_SLIDER, "width", "Width", settings.get("width"), (64, 2048, 8)),
+            (gimpfu.PF_SLIDER, "height", "Height", settings.get("height"), (64, 2048, 8)),
             (gimpfu.PF_SLIDER, "cfg_scale", "CFG Scale", settings.get("cfg_scale"), (0, 20, 0.5)),
             (gimpfu.PF_SLIDER, "denoising_strength", "Denoising Strength", settings.get("denoising_strength"), (0.0, 1.0, 0.1)),
             (gimpfu.PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(settings.get("sampler_name")), SAMPLERS),
