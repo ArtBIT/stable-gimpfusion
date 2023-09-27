@@ -8,7 +8,22 @@ This is a simple Gimp plugin that allows you to augment your painting using [Aut
 
 # Example usage
 
-[![Stable Gimpfusion Demo](https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/17ef144117ed1c914d996592f1a348798c24bc85/assets/gimpfusion-posterframe.png)](https://www.youtube.com/watch?v=4IuIKe1sEFY)
+Using Mona Lisa as the ControlNet
+
+<img src="https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/master/assets/monalisa.png" width="400" />
+
+Converting it to Lady Gaga
+
+<img src="https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/master/assets/monalisa-controlnet-to-ladygaga.png" width="400" />
+
+And inpainting some nerdy glasses
+
+<img src="https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/master/assets/ladygaga-inpainting.png" width="400" />
+<img src="https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/master/assets/ladygaga-inpainting-result.png" width="400" />
+
+See the demo video on YouTube
+
+<a href="https://www.youtube.com/watch?v=4IuIKe1sEFY" title="Stable Gimpfusion Demo"><img src="https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/master/assets/youtube-icon.jpg" width="100" /></a>
 
 # Requirements
 
