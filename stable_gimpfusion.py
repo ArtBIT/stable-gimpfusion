@@ -2,7 +2,7 @@
 # vim: set noai ts=4 sw=4 expandtab
 
 # Stable Gimpfusion 
-# v1.0.13
+# v1.0.14
 # Thin API client for Automatic1111's StableDiffusion API
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
@@ -19,7 +19,7 @@ import gimp
 import gimpenums
 import gimpfu
 
-VERSION = 13
+VERSION = 14
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
@@ -70,6 +70,12 @@ RESIZE_MODES = {
         "Resize And Fill": 2,
         "Just Resize (Latent Upscale)": 3
         }
+
+CONTROL_MODES = {
+    "Balanced": 0,
+    "My prompt is more important": 1,
+    "ControlNet is more important": 2,
+}
 
 SAMPLERS = [
       "Euler a",
@@ -131,7 +137,7 @@ CONTROLNET_DEFAULT_SETTINGS = {
       "guidance": 1.0,
       "guidance_start": 0.0,
       "guidance_end": 1.0,
-      "guessmode": True
+      "control_mode": 0,
     }
 
 GENERATION_MESSAGES = [
@@ -540,7 +546,7 @@ class StableGimpfusionPlugin():
         gimp.pdb.gimp_message("This layer has the following data associated with it\n" + json.dumps(data, sort_keys=True, indent=4))
 
 
-    def saveControlLayer(self, module, model, weight, resize_mode, lowvram, guessmode, guidance_start, guidance_end, guidance, processor_res, threshold_a, threshold_b):
+    def saveControlLayer(self, module, model, weight, resize_mode, lowvram, control_mode, guidance_start, guidance_end, guidance, processor_res, threshold_a, threshold_b):
         """ Take the form params and save them to the layer as gimp.Parasite """
         global settings
         cn_models = settings.get("cn_models", [])
@@ -550,7 +556,7 @@ class StableGimpfusionPlugin():
             "weight": weight,
             "resize_mode": CONTROLNET_RESIZE_MODES[resize_mode],
             "lowvram": lowvram,
-            "guessmode": guessmode,
+            "control_mode": control_mode,
             "guidance_start": guidance_start,
             "guidance_end": guidance_end,
             "guidance": guidance,
@@ -901,7 +907,7 @@ def init_plugin():
             (gimpfu.PF_SLIDER, "weight",  "Weight", 1, (0, 2, 0.05)),
             (gimpfu.PF_OPTION, "resize_mode", "Resize Mode", 1, CONTROLNET_RESIZE_MODES),
             (gimpfu.PF_BOOL, "lowvram", "Low VRAM", False),
-            (gimpfu.PF_BOOL, "guessmode", "Guess Mode", False),
+            (gimpfu.PF_OPTION, "control_mode", "Control Mode", 0, tuple(CONTROL_MODES.keys())),
             (gimpfu.PF_SLIDER, "guidance_start",  "Guidance Start (T)", 0, (0, 1, 0.01)),
             (gimpfu.PF_SLIDER, "guidance_end",  "Guidance End (T)", 1, (0, 1, 0.01)),
             (gimpfu.PF_SLIDER, "guidance",  "Guidance", 1, (0, 1, 0.01)),
