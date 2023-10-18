@@ -1,8 +1,12 @@
 {
-  "version": 12,
-  "message": "Added inpainting options.",
+  "version": 13,
+  "message": "Update controlnet endpoints",
 
   "history": [
+    {
+      "version": 12,
+      "message": "Added inpainting options."
+    },
     {
       "version": 11,
       "message": "Added support for width/height."

@@ -2,7 +2,7 @@
 # vim: set noai ts=4 sw=4 expandtab
 
 # Stable Gimpfusion 
-# v1.0.12
+# v1.0.13
 # Thin API client for Automatic1111's StableDiffusion API
 # https://github.com/AUTOMATIC1111/stable-diffusion-webui
 
@@ -19,7 +19,7 @@ import gimp
 import gimpenums
 import gimpfu
 
-VERSION = 12
+VERSION = 13
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
@@ -307,7 +307,7 @@ class StableGimpfusionPlugin():
         # store active_layer
         active_layer = layer.image.active_layer
         copy = Layer(layer).copy().insert()
-        result = copy.toBase64();
+        result = copy.toBase64()
         copy.remove()
         # restore active_layer
         gimp.pdb.gimp_image_set_active_layer(active_layer.image, active_layer)
@@ -403,10 +403,14 @@ class StableGimpfusionPlugin():
             if cn2_enabled:
                 controlnet_units.append(self.getControlNetParams(cn2_layer))
             if len(controlnet_units) > 0:
-                data.update({"controlnet_units": controlnet_units})
-                response = self.api.post("/controlnet/img2img", data)
-            else:
-                response = self.api.post("/sdapi/v1/img2img", data)
+                alwayson_scripts = {
+                    "controlnet": {
+                        "args": controlnet_units
+                    }
+                }
+                data.update({"alwayson_scripts": alwayson_scripts})
+
+            response = self.api.post("/sdapi/v1/img2img", data)
 
             ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(origWidth, origHeight)
 
@@ -462,10 +466,14 @@ class StableGimpfusionPlugin():
                 controlnet_units.append(self.getControlNetParams(cn2_layer))
 
             if len(controlnet_units) > 0:
-                data.update({"controlnet_units": controlnet_units})
-                response = self.api.post("/controlnet/img2img", data)
-            else:
-                response = self.api.post("/sdapi/v1/img2img", data)
+                alwayson_scripts = {
+                    "controlnet": {
+                        "args": controlnet_units
+                    }
+                }
+                data.update({"alwayson_scripts": alwayson_scripts})
+
+            response = self.api.post("/sdapi/v1/img2img", data)
 
             ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(self.image.width, self.image.height)
 
@@ -507,10 +515,14 @@ class StableGimpfusionPlugin():
                 controlnet_units.append(self.getControlNetParams(cn2_layer))
 
             if len(controlnet_units) > 0:
-                data.update({"controlnet_units": controlnet_units})
-                response = self.api.post("/controlnet/txt2img", data)
-            else:
-                response = self.api.post("/sdapi/v1/txt2img", data)
+                alwayson_scripts = {
+                    "controlnet": {
+                        "args": controlnet_units
+                    }
+                }
+                data.update({"alwayson_scripts": alwayson_scripts})
+
+            response = self.api.post("/sdapi/v1/txt2img", data)
 
             ResponseLayers(image, response, {"skip_annotator_layers": cn_skip_annotator_layers}).resize(origWidth, origHeight).translate((x, y)).addSelectionAsMask()
 
@@ -600,7 +612,7 @@ class LayerData():
         self.name = 'gimpfusion'
         self.layer = layer
         self.image = layer.image
-        self.defaults = defaults;
+        self.defaults = defaults
         self.had_parasite = False
         self.load()
 
@@ -644,7 +656,7 @@ class Layer():
 
     def rename(self, name):
         gimp.pdb.gimp_layer_set_name(self.layer, name)
-        return self;
+        return self
 
     def saveData(self, data):
         LayerData(self.layer).save(data)
