@@ -1,8 +1,12 @@
 {
-  "version": 13,
-  "message": "Update controlnet endpoints",
+  "version": 14,
+  "message": "Add Control Mode options.",
 
   "history": [
+    {
+      "version": 13,
+      "message": "Update controlnet endpoints."
+    },
     {
       "version": 12,
       "message": "Added inpainting options."
