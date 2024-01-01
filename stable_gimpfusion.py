@@ -861,11 +861,11 @@ def init_plugin():
             (gimpfu.PF_INT32, "seed", "Seed", settings.get("seed")),
             (gimpfu.PF_INT32, "batch_size", "Batch count", settings.get("batch_size")),
             (gimpfu.PF_INT32, "steps", "Steps", settings.get("steps")),
-            (gimpfu.PF_INT32, "mask_blur", "Mask Blur", settings.get("mask_blur")),
+            (gimpfu.PF_SLIDER, "mask_blur", "Mask Blur", settings.get("mask_blur"), (1, 10, 1.0)),
             (gimpfu.PF_INT32, "width", "Width", settings.get("width")),
             (gimpfu.PF_INT32, "height", "Height", settings.get("height")),
             (gimpfu.PF_INT32, "cfg_scale", "CFG Scale", settings.get("cfg_scale")),
-            (gimpfu.PF_INT32, "denoising_strength", "Denoising Strength", settings.get("denoising_strength")),
+            (gimpfu.PF_SLIDER, "denoising_strength", "Denoising Strength", settings.get("denoising_strength"), (0.0, 1.0, 0.01)),
             (gimpfu.PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(settings.get("sampler_name")), SAMPLERS),
             ]
 
