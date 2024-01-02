@@ -1,8 +1,12 @@
 {
-  "version": 14,
-  "message": "Add Control Mode options.",
+  "version": 15,
+  "message": "Fix an issue with changing models",
 
   "history": [
+    {
+      "version": 14,
+      "message": "Update controlnet endpoints."
+    },
     {
       "version": 13,
       "message": "Update controlnet endpoints."
