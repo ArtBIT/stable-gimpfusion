@@ -581,7 +581,7 @@ class StableGimpfusionPlugin():
         global settings
         if settings.get("model") != model:
             gimp.pdb.gimp_progress_init("", None)
-            gimp.pdb.gimp_progress_set_text("Changing model to "+models[model])
+            gimp.pdb.gimp_progress_set_text("Changing model...")
             try:
                 self.api.post("/sdapi/v1/options", { "sd_model_checkpoint": models[model] } )
                 settings.set("sd_model_checkpoint", model)
@@ -859,12 +859,12 @@ def init_plugin():
             (gimpfu.PF_TEXT, "prompt", "Prompt", settings.get("prompt")),
             (gimpfu.PF_TEXT, "negative_prompt", "Negative Prompt", settings.get("negative_prompt")),
             (gimpfu.PF_INT32, "seed", "Seed", settings.get("seed")),
-            (gimpfu.PF_INT32, "batch_size", "Batch count", settings.get("batch_size")),
-            (gimpfu.PF_INT32, "steps", "Steps", settings.get("steps")),
+            (gimpfu.PF_SLIDER, "batch_size", "Batch count", settings.get("batch_size"), (1, 20, 1.0)),
+            (gimpfu.PF_SLIDER, "steps", "Steps", settings.get("steps"), (10, 150, 1.0)),
             (gimpfu.PF_SLIDER, "mask_blur", "Mask Blur", settings.get("mask_blur"), (1, 10, 1.0)),
-            (gimpfu.PF_INT32, "width", "Width", settings.get("width")),
-            (gimpfu.PF_INT32, "height", "Height", settings.get("height")),
-            (gimpfu.PF_INT32, "cfg_scale", "CFG Scale", settings.get("cfg_scale")),
+            (gimpfu.PF_SLIDER, "width", "Width", settings.get("width"), (64, 2048, 8)),
+            (gimpfu.PF_SLIDER, "height", "Height", settings.get("height"), (64, 2048, 8)),
+            (gimpfu.PF_SLIDER, "cfg_scale", "CFG Scale", settings.get("cfg_scale"), (0, 20, 0.5)),
             (gimpfu.PF_SLIDER, "denoising_strength", "Denoising Strength", settings.get("denoising_strength"), (0.0, 1.0, 0.01)),
             (gimpfu.PF_OPTION, "sampler_index", "Sampler", SAMPLERS.index(settings.get("sampler_name")), SAMPLERS),
             ]
