@@ -583,7 +583,7 @@ class StableGimpfusionPlugin():
             gimp.pdb.gimp_progress_init("", None)
             gimp.pdb.gimp_progress_set_text("Changing model...")
             try:
-                self.api.post("/sdapi/v1/options", { "sd_model_checkpoint", model } )
+                self.api.post("/sdapi/v1/options", { "sd_model_checkpoint": models[model] } )
                 settings.set("sd_model_checkpoint", model)
             except Exception as e:
                 logging.error(e)
