@@ -19,7 +19,7 @@ import gimp
 import gimpenums
 import gimpfu
 
-VERSION = 14
+VERSION = 15
 PLUGIN_NAME = "StableGimpfusion"
 PLUGIN_VERSION_URL = "https://raw.githubusercontent.com/ArtBIT/stable-gimpfusion/main/version.json"
 MAX_BATCH_SIZE = 20
